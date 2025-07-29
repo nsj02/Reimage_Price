@@ -6,9 +6,11 @@ Implementation of "Re-Imaging Price Trends" (Journal of Finance, 2023) - Convert
 
 ### 0. Colab Setup (Recommended)
 For Google Colab environment:
-```python
-# Upload project files to Colab and run:
-!python setup_colab.py
+```bash
+# 1. Upload project to Google Drive
+# 2. Run notebooks in order:
+#    - 1_image_generation.ipynb (생성 완료)
+#    - 2_model_training.ipynb (학습 & 평가)
 ```
 
 ### 1. Data Preparation

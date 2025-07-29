@@ -57,3 +57,4 @@ Thumbs.db
 *.parquet
 data/*.parquet
 images/
+img_data/

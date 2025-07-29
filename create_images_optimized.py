@@ -21,14 +21,13 @@ def main():
     parser.add_argument('--mode', type=str, required=True,
                        choices=['train', 'test', 'inference'],
                        help='데이터셋 모드')
-    parser.add_argument('--sample_rate', type=float, default=1.0,
-                       help='데이터 샘플링 비율 (default: 1.0)')
+    parser.add_argument('--sample_rate', type=float, default=0.01,
+                       help='데이터 샘플링 비율 (default: 0.01 = 1% for fast testing)')
     parser.add_argument('--pred_days', type=int, default=None,
                        choices=[5, 20, 60],
                        help='예측 기간 (라벨용, 기본값: image_days와 동일)')
     parser.add_argument('--parallel', type=int, default=4,
-                       choices=[1, 2, 4, 8],
-                       help='병렬 처리 코어 수 (default: 4)')
+                       help='병렬 처리 코어 수 (default: 4, 제한 없음)')
     
     args = parser.parse_args()
     

@@ -111,8 +111,19 @@ def single_symbol_image(tabular_df, image_size, start_date, sample_rate, mode):
             if not pd.isna(price_slice.loc[i]['ma']):
                 image[int(price_slice.loc[i]['ma']), i*3:i*3+3] = 255.
             
-            # 거래량
-            image[:volume_slice.loc[i]['volume'], i*3+1] = 255.
+            # 거래량 (하단 영역에만, High-Low와 충돌 방지)
+            # 이미지 크기에 따른 거래량 영역 설정
+            if image_size[0] == 32:  # 5일 모델
+                volume_region_height = 6
+            elif image_size[0] == 64:  # 20일 모델  
+                volume_region_height = 12
+            else:  # 96, 60일 모델
+                volume_region_height = 19
+            
+            volume_height = min(volume_slice.loc[i]['volume'], volume_region_height-1)
+            # 거래량 방향 수정: 아래에서 위로 (bottom-up)
+            volume_bottom = image_size[0] - 1  # 맨 아래 픽셀
+            image[volume_bottom-volume_height:volume_bottom+1, i*3+1] = 255.
         
         # 라벨 추출: 이진 라벨과 실제 수익률 모두
         label_ret5 = tabular_df.iloc[d]['label_5']

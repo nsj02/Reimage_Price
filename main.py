@@ -72,7 +72,7 @@ def main():
     if not os.path.exists(metadata_file):
         print(f"\n❌ 사전 생성된 이미지가 없습니다: {image_dir}")
         print(f"다음 명령어로 이미지를 먼저 생성하세요:")
-        print(f"python create_images.py --image_days {args.image_days} --mode train --pred_days {args.pred_days}")
+        print(f"python create_images_optimized.py --image_days {args.image_days} --mode train --pred_days {args.pred_days}")
         return
     
     # 사전 생성된 이미지 데이터셋 로드

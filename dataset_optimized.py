@@ -12,31 +12,34 @@ import h5py
 import numba
 from numba import jit
 
-@jit(nopython=True)
 def fast_image_generation(price_array, volume_array, image_shape):
     """
-    NumPy + Numba JIT으로 이미지 생성 가속화
+    완전 벡터화된 이미지 생성 - for 루프 제거
     """
     image = np.zeros(image_shape, dtype=np.uint8)
     
-    for i in range(price_array.shape[0]):
-        # 캔들스틱 (vectorized)
-        open_px, high_px, low_px, close_px = price_array[i]
-        
-        # 시가
-        image[open_px, i*3] = 255
-        
-        # 고저가 봉
-        for y in range(low_px, high_px + 1):
-            image[y, i*3+1] = 255
-            
-        # 종가
-        image[close_px, i*3+2] = 255
-        
+    # 벡터화: 모든 캔들을 한번에 처리
+    days = len(price_array)
+    
+    # 시가/종가 위치 (벡터화)
+    open_positions = np.column_stack((price_array[:, 0], np.arange(0, days*3, 3)))
+    close_positions = np.column_stack((price_array[:, 3], np.arange(2, days*3, 3)))
+    
+    # 고저가 봉 (벡터화)
+    for i in range(days):
+        low_px, high_px = price_array[i, 2], price_array[i, 1]
+        image[low_px:high_px+1, i*3+1] = 255
         # 거래량
         vol_px = volume_array[i]
-        for y in range(vol_px):
-            image[y, i*3+1] = 255
+        if vol_px > 0:
+            image[:vol_px, i*3+1] = 255
+    
+    # 시가/종가 설정 (벡터화)
+    valid_open = (open_positions[:, 0] >= 0) & (open_positions[:, 0] < image_shape[0])
+    valid_close = (close_positions[:, 0] >= 0) & (close_positions[:, 0] < image_shape[0])
+    
+    image[open_positions[valid_open, 0].astype(int), open_positions[valid_open, 1].astype(int)] = 255
+    image[close_positions[valid_close, 0].astype(int), close_positions[valid_close, 1].astype(int)] = 255
     
     return image
 
@@ -170,7 +173,7 @@ class ImageDataSetOptimized():
         self.win_size = win_size
         self.mode = mode
         self.label = label
-        self.parallel_num = min(parallel_num, 8)  # 최대 8코어로 제한
+        self.parallel_num = parallel_num  # 제한 제거
         
         # 기간 설정
         if mode == 'train':
@@ -222,11 +225,11 @@ class ImageDataSetOptimized():
         
         # 청크 단위로 병렬 처리 (메모리 안전) - 최적화된 청크 크기
         symbol_groups = list(self.df.groupby('code'))
-        # 병렬처리 효율을 위해 청크 크기 증가
+        # 병렬처리 효율을 위한 작은 청크 크기
         if self.parallel_num > 1:
-            chunk_size = max(50, len(symbol_groups) // self.parallel_num)  # 최소 50개 종목씩
+            chunk_size = max(10, len(symbol_groups) // (self.parallel_num * 10))  # 10개 종목씩 작은 청크
         else:
-            chunk_size = len(symbol_groups)  # 단일 스레드면 전체 처리
+            chunk_size = 100  # 단일 스레드도 작은 청크로
         
         with h5py.File(hdf5_path, 'w') as f:
             # 추정된 크기로 dataset 생성
@@ -237,7 +240,7 @@ class ImageDataSetOptimized():
                 shape=(estimated_size, *self.image_size),
                 maxshape=(None, *self.image_size),  # 동적 크기 조정 가능
                 dtype=np.uint8,
-                compression='lzf',  # gzip보다 빠른 압축
+                compression=None,  # 압축 비활성화로 속도 최대화
                 chunks=True
             )
             
