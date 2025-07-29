@@ -14,6 +14,7 @@ from __init__ import *
 import model as _M
 import train as _T
 import dataset as _D
+import dataset_original as _D_ORIG
 import argparse
 import os
 
@@ -37,6 +38,8 @@ def main():
                        help='최대 에포크 (default: 100)')
     parser.add_argument('--lr', type=float, default=1e-5,
                        help='학습률 (default: 1e-5)')
+    parser.add_argument('--use_original_format', action='store_true',
+                       help='원본 형식 (.dat + .feather) 사용')
     
     args = parser.parse_args()
     
@@ -65,22 +68,35 @@ def main():
         print("학습을 건너뜁니다.")
         return
     
-    # 사전 생성된 이미지 디렉토리 확인
-    image_dir = f"images/train_I{args.image_days}R{args.pred_days}"
-    metadata_file = os.path.join(image_dir, 'metadata.csv')
-    
-    if not os.path.exists(metadata_file):
-        print(f"\n❌ 사전 생성된 이미지가 없습니다: {image_dir}")
-        print(f"다음 명령어로 이미지를 먼저 생성하세요:")
-        print(f"python create_images_optimized.py --image_days {args.image_days} --mode train --pred_days {args.pred_days}")
-        return
-    
-    # 사전 생성된 이미지 데이터셋 로드
-    print(f"\n사전 생성된 이미지 로드 중: {image_dir}")
-    full_dataset = _D.PrecomputedImageDataset(
-        image_dir=image_dir,
-        label_type=f'RET{args.pred_days}'
-    )
+    # 데이터셋 로드 (원본 형식 vs 최적화 형식)
+    if args.use_original_format:
+        print(f"\n원본 형식 데이터셋 로드 중...")
+        full_dataset = _D_ORIG.load_original_dataset(
+            win_size=args.image_days,
+            mode='train',
+            label_type=f'RET{args.pred_days}'
+        )
+        if full_dataset is None:
+            print(f"다음 명령어로 원본 형식 이미지를 먼저 생성하세요:")
+            print(f"python create_original_format.py --image_days {args.image_days} --mode train")
+            return
+    else:
+        # 사전 생성된 이미지 디렉토리 확인
+        image_dir = f"images/train_I{args.image_days}R{args.pred_days}"
+        metadata_file = os.path.join(image_dir, 'metadata.csv')
+        
+        if not os.path.exists(metadata_file):
+            print(f"\n❌ 사전 생성된 이미지가 없습니다: {image_dir}")
+            print(f"다음 명령어로 이미지를 먼저 생성하세요:")
+            print(f"python create_images_optimized.py --image_days {args.image_days} --mode train --pred_days {args.pred_days}")
+            return
+        
+        # 사전 생성된 이미지 데이터셋 로드
+        print(f"\n사전 생성된 이미지 로드 중: {image_dir}")
+        full_dataset = _D.PrecomputedImageDataset(
+            image_dir=image_dir,
+            label_type=f'RET{args.pred_days}'
+        )
     
     # 훈련/검증 분할 (논문: 70:30 랜덤 분할)
     train_size = int(len(full_dataset) * 0.7)

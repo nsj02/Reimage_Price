@@ -14,11 +14,13 @@ test.py - 논문 방식 Decile 포트폴리오 성능 평가
 from __init__ import *
 import model as _M
 import dataset as _D
+import dataset_original as _D_ORIG
 import argparse
+import json
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-def decile_portfolio_backtest(model, label_type, model_file, image_days, pred_days):
+def decile_portfolio_backtest(model, label_type, model_file, image_days, pred_days, use_original_format=False):
     """
     논문 방식 decile 포트폴리오 백테스팅
     """
@@ -32,22 +34,35 @@ def decile_portfolio_backtest(model, label_type, model_file, image_days, pred_da
     model.load_state_dict(state_dict['model_state_dict'])
     model.eval()
     
-    # 사전 생성된 테스트 이미지 확인
-    test_image_dir = f"images/test_I{image_days}R{pred_days}"
-    metadata_file = os.path.join(test_image_dir, 'metadata.csv')
-    
-    if not os.path.exists(metadata_file):
-        print(f"❌ 사전 생성된 테스트 이미지가 없습니다: {test_image_dir}")
-        print(f"다음 명령어로 테스트 이미지를 먼저 생성하세요:")
-        print(f"python create_images.py --image_days {image_days} --mode test --pred_days {pred_days}")
-        return None
-    
-    # 사전 생성된 테스트 이미지 로드
-    print(f"사전 생성된 테스트 이미지 로드 중: {test_image_dir}")
-    test_dataset = _D.PrecomputedImageDataset(
-        image_dir=test_image_dir,
-        label_type=label_type
-    )
+    # 테스트 데이터셋 로드 (원본 형식 vs 최적화 형식)
+    if use_original_format:
+        print(f"원본 형식 테스트 데이터셋 로드 중...")
+        test_dataset = _D_ORIG.load_original_dataset(
+            win_size=image_days,
+            mode='test',
+            label_type=label_type
+        )
+        if test_dataset is None:
+            print(f"다음 명령어로 원본 형식 테스트 이미지를 먼저 생성하세요:")
+            print(f"python create_original_format.py --image_days {image_days} --mode test")
+            return None
+    else:
+        # 사전 생성된 테스트 이미지 확인
+        test_image_dir = f"images/test_I{image_days}R{pred_days}"
+        metadata_file = os.path.join(test_image_dir, 'metadata.csv')
+        
+        if not os.path.exists(metadata_file):
+            print(f"❌ 사전 생성된 테스트 이미지가 없습니다: {test_image_dir}")
+            print(f"다음 명령어로 테스트 이미지를 먼저 생성하세요:")
+            print(f"python create_images.py --image_days {image_days} --mode test --pred_days {pred_days}")
+            return None
+        
+        # 사전 생성된 테스트 이미지 로드
+        print(f"사전 생성된 테스트 이미지 로드 중: {test_image_dir}")
+        test_dataset = _D.PrecomputedImageDataset(
+            image_dir=test_image_dir,
+            label_type=label_type
+        )
     
     print(f"로드된 테스트 이미지: {len(test_dataset):,}개")
     
@@ -82,6 +97,7 @@ def decile_portfolio_backtest(model, label_type, model_file, image_days, pred_da
                 actual_returns = ret60.numpy()
             
             # 배치 결과 저장
+            batch_start_idx = batch_idx * test_loader.batch_size
             for i in range(len(up_probs)):
                 predictions.append({
                     'image_id': batch_start_idx + i,
@@ -96,7 +112,6 @@ def decile_portfolio_backtest(model, label_type, model_file, image_days, pred_da
         
     df = pd.DataFrame(predictions)
     print(f"총 예측 수: {len(df):,}개")
-    print(f"기간: {df['date'].min()} ~ {df['date'].max()}")
     
     # Decile 포트폴리오 백테스팅
     portfolio_performance = calculate_decile_performance(df, pred_days)
@@ -288,6 +303,8 @@ def main():
     parser.add_argument('--pred_days', type=int, required=True,
                        choices=[5, 20, 60], 
                        help='예측 기간')
+    parser.add_argument('--use_original_format', action='store_true',
+                       help='원본 형식 (.dat + .feather) 사용')
     
     args = parser.parse_args()
     
@@ -315,7 +332,8 @@ def main():
         label_type=f'RET{args.pred_days}',
         model_file=model_file,
         image_days=args.image_days,
-        pred_days=args.pred_days
+        pred_days=args.pred_days,
+        use_original_format=args.use_original_format
     )
     
     if results:

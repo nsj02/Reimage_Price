@@ -17,7 +17,16 @@ import dataset as _D
 import argparse
 import os
 import struct
-import feather
+from tqdm import tqdm
+try:
+    import pyarrow.feather as feather
+except ImportError:
+    import pandas as pd
+    # pandas 내장 feather 사용
+    feather = type('feather', (), {
+        'write_feather': pd.DataFrame.to_feather,
+        'read_feather': pd.read_feather
+    })()
 
 def create_original_format_images(win_size, mode, sample_rate=1.0):
     """
@@ -53,7 +62,7 @@ def create_original_format_images(win_size, mode, sample_rate=1.0):
     dataset = _D.ImageDataSet(
         win_size=win_size,
         mode=mode,
-        label=f'RET{win_size}',  # 기본적으로 동일한 기간
+        label=f'RET{win_size}',  # ImageDataSet에서 지원하는 형식
         parallel_num=4
     )
     
@@ -124,7 +133,6 @@ def create_original_format_images(win_size, mode, sample_rate=1.0):
         
         # Binary로 저장 (원본과 동일)
         with open(images_path, 'wb') as f:
-            images_array.tobytes()
             f.write(images_array.tobytes())
         
         # 2. 라벨을 .feather 파일로 저장
@@ -145,7 +153,7 @@ def create_original_format_images(win_size, mode, sample_rate=1.0):
         labels_df['EWMA_vol'] = labels_df['EWMA_vol'].astype(np.float64)
         
         # Feather 형식으로 저장
-        labels_df.to_feather(labels_path)
+        feather.write_feather(labels_df, labels_path)
         
         # 파일 크기 확인
         img_size_mb = os.path.getsize(images_path) / (1024*1024)
@@ -207,7 +215,7 @@ def verify_original_format(output_dir, year=1993):
     
     # 라벨 파일 검증
     try:
-        labels = pd.read_feather(labels_path)
+        labels = feather.read_feather(labels_path)
         print(f"✅ 라벨 파일: {len(labels):,}개 레코드")
         print(f"   컬럼: {labels.columns.tolist()}")
         print(f"   데이터 타입: {labels.dtypes.to_dict()}")
