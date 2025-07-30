@@ -27,7 +27,7 @@ def train_n_epochs(n_epochs, model, label_type, train_loader, valid_loader, crit
         label_type (str): 예측 라벨 타입 ('RET5', 'RET20', 또는 'RET60')
         train_loader: 훈련 데이터 로더
         valid_loader: 검증 데이터 로더  
-        criterion: 손실 함수 (CrossEntropyLoss)
+        criterion: 손실 함수 (BCELoss)
         optimizer: 최적화 알고리즘 (예: Adam)
         savefile (str): 모델 저장 경로
         early_stop_epoch (int): 조기 종료 기준 에포크 수
@@ -53,18 +53,18 @@ def train_n_epochs(n_epochs, model, label_type, train_loader, valid_loader, crit
         # ============== 🏋️ 훈련 단계 (Training Phase) ==============
         model.train()  # 모델을 훈련 모드로 설정 (Dropout, BatchNorm 활성화)
         
-        for i, (data, ret5, ret20, ret60, _, _, _) in enumerate(train_loader):
+        for i, (data, label_5, label_20, label_60, ret5, ret20, ret60) in enumerate(train_loader):  # 7개 요소 (원본 형식)
             # 라벨 타입에 따라 예측 타겟 선택
             assert label_type in ['RET5', 'RET20', 'RET60'], f"잘못된 라벨 타입: {label_type}"
             if label_type == 'RET5':
-                target = ret5
+                target = label_5
             elif label_type == 'RET20':
-                target = ret20
+                target = label_20
             else:  # RET60
-                target = ret60
+                target = label_60
 
-            # CrossEntropyLoss용 라벨 (원-핫 인코딩 불필요)
-            target = target.long()
+            # BCELoss용 라벨 (0~1 float, shape 맞춤)
+            target = target.float().unsqueeze(1)  # [N] -> [N, 1]
 
             # GPU로 데이터 이동
             data, target = data.to(device), target.to(device)
@@ -86,24 +86,24 @@ def train_n_epochs(n_epochs, model, label_type, train_loader, valid_loader, crit
             
             # 성능 지표 누적
             train_loss += loss.item() * data.size(0)  # 가중 평균을 위해 배치 크기 곱함
-            train_acc += (output.argmax(1) == target).sum()  # 예측과 실제 비교
+            train_acc += ((output > 0.5).float() == target).sum()  # BCE는 0.5 임계값으로 분류
 
         # ============== 📊 검증 단계 (Validation Phase) ==============
         model.eval()  # 모델을 평가 모드로 설정 (Dropout 비활성화, BatchNorm 고정)
         
         with torch.no_grad():  # 검증 단계에서는 경사도 계산 비활성화 (메모리 절약)
-            for i, (data, ret5, ret20, ret60, _, _, _) in enumerate(valid_loader):
+            for i, (data, label_5, label_20, label_60, ret5, ret20, ret60) in enumerate(valid_loader):  # 7개 요소 (원본 형식)
                 # 훈련 단계와 동일한 라벨 처리
                 assert label_type in ['RET5', 'RET20', 'RET60'], f"잘못된 라벨 타입: {label_type}"
                 if label_type == 'RET5':
-                    target = ret5
+                    target = label_5
                 elif label_type == 'RET20':
-                    target = ret20
+                    target = label_20
                 else:  # RET60
-                    target = ret60
+                    target = label_60
                     
-                # CrossEntropyLoss용 라벨 (원-핫 인코딩 불필요)
-                target = target.long()
+                # BCELoss용 라벨 (0~1 float, shape 맞춤)
+                target = target.float().unsqueeze(1)  # [N] -> [N, 1]
                     
                 # GPU로 데이터 이동
                 data, target = data.to(device), target.to(device)
@@ -114,7 +114,7 @@ def train_n_epochs(n_epochs, model, label_type, train_loader, valid_loader, crit
                 
                 # 검증 성능 지표 누적
                 valid_loss += loss.item() * data.size(0)
-                valid_acc += (output.argmax(1) == target).sum()
+                valid_acc += ((output > 0.5).float() == target).sum()  # BCE는 0.5 임계값으로 분류
         
         # ============== 📈 에포크별 성능 계산 및 기록 ==============
         

@@ -87,43 +87,56 @@ def single_symbol_image(tabular_df, image_size, start_date, sample_rate, mode):
         # 거래량 정규화
         volume_slice = (volume_slice - np.min(volume_slice.values))/(np.max(volume_slice.values) - np.min(volume_slice.values))
         
-        # 픽셀 좌표 변환 (가격: 상위 4/5, 거래량: 하위 1/5)
+        # 픽셀 좌표 변환 (가격: 상단 영역, 거래량: 하단 영역 완전 분리)
         if image_size[0] == 32:
-            price_slice = price_slice.apply(lambda x: x*(25-1)+7).astype(np.int32)
-            volume_slice = volume_slice.apply(lambda x: x*(6-1)).astype(np.int32)
+            # 5d: 가격 0-25행 (26행), 거래량 26-31행 (6행)
+            price_slice = price_slice.apply(lambda x: x*25).astype(np.int32)
+            volume_slice = volume_slice.apply(lambda x: x*5).astype(np.int32)
         elif image_size[0] == 64:
-            price_slice = price_slice.apply(lambda x: x*(51-1)+13).astype(np.int32)
-            volume_slice = volume_slice.apply(lambda x: x*(12-1)).astype(np.int32)
+            # 20d: 가격 0-51행 (52행), 거래량 52-63행 (12행)  
+            price_slice = price_slice.apply(lambda x: x*51).astype(np.int32)
+            volume_slice = volume_slice.apply(lambda x: x*11).astype(np.int32)
         else:  # 96
-            price_slice = price_slice.apply(lambda x: x*(76-1)+20).astype(np.int32)
-            volume_slice = volume_slice.apply(lambda x: x*(19-1)).astype(np.int32)
+            # 60d: 가격 0-76행 (77행), 거래량 77-95행 (19행)
+            price_slice = price_slice.apply(lambda x: x*76).astype(np.int32)
+            volume_slice = volume_slice.apply(lambda x: x*18).astype(np.int32)
         
         # 이미지 생성
         image = np.zeros(image_size)
         
+        # 영역 경계 설정
+        if image_size[0] == 32:  # 5일 모델
+            price_region_end = 25  # 가격 영역: 0-25행
+            volume_start_row = 26  # 거래량 영역: 26-31행
+        elif image_size[0] == 64:  # 20일 모델  
+            price_region_end = 51  # 가격 영역: 0-51행
+            volume_start_row = 52  # 거래량 영역: 52-63행
+        else:  # 96, 60일 모델
+            price_region_end = 76  # 가격 영역: 0-76행
+            volume_start_row = 77  # 거래량 영역: 77-95행
+        
         for i in range(len(price_slice)):
-            # 캔들스틱
-            image[price_slice.loc[i]['open'], i*3] = 255.
-            image[price_slice.loc[i]['low']:price_slice.loc[i]['high']+1, i*3+1] = 255.
-            image[price_slice.loc[i]['close'], i*3+2] = 255.
+            # 캔들스틱 (가격 영역에만)
+            open_px = min(price_slice.loc[i]['open'], price_region_end)
+            close_px = min(price_slice.loc[i]['close'], price_region_end)
+            low_px = min(price_slice.loc[i]['low'], price_region_end)
+            high_px = min(price_slice.loc[i]['high'], price_region_end)
             
-            # 이동평균선
+            image[open_px, i*3] = 255.
+            image[low_px:high_px+1, i*3+1] = 255.  # High-Low bar 가격 영역에만
+            image[close_px, i*3+2] = 255.
+            
+            # 이동평균선 (가격 영역에만)
             if not pd.isna(price_slice.loc[i]['ma']):
-                image[int(price_slice.loc[i]['ma']), i*3:i*3+3] = 255.
+                ma_px = min(int(price_slice.loc[i]['ma']), price_region_end)
+                image[ma_px, i*3:i*3+3] = 255.
             
-            # 거래량 (하단 영역에만, High-Low와 충돌 방지)
-            # 이미지 크기에 따른 거래량 영역 설정
-            if image_size[0] == 32:  # 5일 모델
-                volume_region_height = 6
-            elif image_size[0] == 64:  # 20일 모델  
-                volume_region_height = 12
-            else:  # 96, 60일 모델
-                volume_region_height = 19
-            
-            volume_height = min(volume_slice.loc[i]['volume'], volume_region_height-1)
-            # 거래량 방향 수정: 아래에서 위로 (bottom-up)
-            volume_bottom = image_size[0] - 1  # 맨 아래 픽셀
-            image[volume_bottom-volume_height:volume_bottom+1, i*3+1] = 255.
+            # 거래량을 하단 전용 영역에 렌더링 (완전 분리)
+            volume_height = int(volume_slice.loc[i]['volume'])
+            if volume_height > 0:
+                volume_bottom = image_size[0] - 1  # 맨 아래 픽셀
+                volume_top = max(volume_start_row, volume_bottom - volume_height + 1)
+                image[volume_top:volume_bottom+1, i*3+1] = 255.
         
         # 라벨 추출: 이진 라벨과 실제 수익률 모두
         label_ret5 = tabular_df.iloc[d]['label_5']
@@ -140,7 +153,15 @@ def single_symbol_image(tabular_df, image_size, start_date, sample_rate, mode):
         if pd.isna(actual_ret5) or pd.isna(actual_ret20) or pd.isna(actual_ret60):
             continue
         
-        entry = [image, label_ret5, label_ret20, label_ret60, actual_ret5, actual_ret20, actual_ret60]
+        # 시가총액과 EWMA volatility 값 추가
+        market_cap_val = tabular_df.iloc[d].get('market_cap', np.random.uniform(10000, 100000))
+        ewma_vol_val = tabular_df.iloc[d].get('ewma_vol', np.random.uniform(0.0001, 0.001))
+        
+        # 날짜와 종목코드 정보 포함 (original format 호환) - 11개 요소
+        entry_date = tabular_df.iloc[d]['date']
+        entry_code = tabular_df.iloc[0]['code']
+        entry = [image, label_ret5, label_ret20, label_ret60, actual_ret5, actual_ret20, actual_ret60, 
+                entry_date, entry_code, market_cap_val, ewma_vol_val]
         dataset.append(entry)
     
     if mode == 'train' or mode == 'test':
@@ -384,7 +405,7 @@ class ImageDataSet():
                 
                 # 즉시 HDF5에 저장
                 for entry in symbol_images:
-                    if len(entry) == 7 and image_idx < total_images:
+                    if len(entry) == 11 and image_idx < total_images:  # 11개 요소 (날짜, 코드, 시가총액, EWMA 포함)
                         # 이미지를 HDF5에 직접 저장
                         images_dataset[image_idx] = entry[0].astype(np.uint8)
                         

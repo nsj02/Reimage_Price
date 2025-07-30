@@ -176,7 +176,7 @@ class OriginalFormatDataset(torch.utils.data.Dataset):
             # 기본값 (파일 형식이 다른 경우)
             label_5 = label_20 = label_60 = 0
             ret5 = ret20 = ret60 = 0.0
-            
+        
         return image, label_5, label_20, label_60, ret5, ret20, ret60
 
 

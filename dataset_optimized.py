@@ -14,32 +14,39 @@ from numba import jit
 
 def fast_image_generation(price_array, volume_array, image_shape):
     """
-    완전 벡터화된 이미지 생성 - for 루프 제거
+    영역 분리가 적용된 벡터화 이미지 생성
     """
     image = np.zeros(image_shape, dtype=np.uint8)
-    
-    # 벡터화: 모든 캔들을 한번에 처리
     days = len(price_array)
     
-    # 시가/종가 위치 (벡터화)
-    open_positions = np.column_stack((price_array[:, 0], np.arange(0, days*3, 3)))
-    close_positions = np.column_stack((price_array[:, 3], np.arange(2, days*3, 3)))
+    # 영역 경계 설정
+    if image_shape[0] == 32:  # 5일 모델
+        price_region_end = 25  # 가격 영역: 0-25행
+        volume_start_row = 26  # 거래량 영역: 26-31행
+    elif image_shape[0] == 64:  # 20일 모델  
+        price_region_end = 51  # 가격 영역: 0-51행
+        volume_start_row = 52  # 거래량 영역: 52-63행
+    else:  # 96, 60일 모델
+        price_region_end = 76  # 가격 영역: 0-76행
+        volume_start_row = 77  # 거래량 영역: 77-95행
     
-    # 고저가 봉 (벡터화)
     for i in range(days):
-        low_px, high_px = price_array[i, 2], price_array[i, 1]
-        image[low_px:high_px+1, i*3+1] = 255
-        # 거래량
-        vol_px = volume_array[i]
-        if vol_px > 0:
-            image[:vol_px, i*3+1] = 255
-    
-    # 시가/종가 설정 (벡터화)
-    valid_open = (open_positions[:, 0] >= 0) & (open_positions[:, 0] < image_shape[0])
-    valid_close = (close_positions[:, 0] >= 0) & (close_positions[:, 0] < image_shape[0])
-    
-    image[open_positions[valid_open, 0].astype(int), open_positions[valid_open, 1].astype(int)] = 255
-    image[close_positions[valid_close, 0].astype(int), close_positions[valid_close, 1].astype(int)] = 255
+        # 캔들스틱 (가격 영역에만)
+        open_px = min(int(price_array[i, 0]), price_region_end)
+        close_px = min(int(price_array[i, 3]), price_region_end)
+        low_px = min(int(price_array[i, 2]), price_region_end)
+        high_px = min(int(price_array[i, 1]), price_region_end)
+        
+        image[open_px, i*3] = 255.
+        image[low_px:high_px+1, i*3+1] = 255.  # High-Low bar 가격 영역에만
+        image[close_px, i*3+2] = 255.
+        
+        # 거래량을 하단 전용 영역에 렌더링 (완전 분리)
+        volume_height = int(volume_array[i])
+        if volume_height > 0:
+            volume_bottom = image_shape[0] - 1  # 맨 아래 픽셀
+            volume_top = max(volume_start_row, volume_bottom - volume_height + 1)
+            image[volume_top:volume_bottom+1, i*3+1] = 255.
     
     return image
 
@@ -69,6 +76,10 @@ def single_symbol_image_optimized(tabular_df, image_size, start_date, sample_rat
     rets_5 = df_filtered['ret5'].to_numpy(dtype=np.float64, na_value=np.nan) / 100.0
     rets_20 = df_filtered['ret20'].to_numpy(dtype=np.float64, na_value=np.nan) / 100.0
     rets_60 = df_filtered['ret60'].to_numpy(dtype=np.float64, na_value=np.nan) / 100.0
+    
+    # 시가총액과 EWMA volatility 데이터 추가
+    market_caps = df_filtered.get('market_cap', pd.Series([np.nan] * len(df_filtered))).to_numpy(dtype=np.float64, na_value=np.nan)
+    ewma_vols = df_filtered.get('ewma_vol', pd.Series([np.nan] * len(df_filtered))).to_numpy(dtype=np.float64, na_value=np.nan)
     
     # 2. Non-overlapping windows 벡터화
     for d in range(lookback-1, len(df_filtered), lookback):
@@ -130,15 +141,18 @@ def single_symbol_image_optimized(tabular_df, image_size, start_date, sample_rat
         else:
             volume_normalized = (volume_window - vol_min) / (vol_max - vol_min)
         
-        # 5. 픽셀 좌표 변환 (벡터화)
+        # 5. 픽셀 좌표 변환 (영역 분리 적용)
         if image_size[0] == 32:
-            price_pixels = (normalized_prices * 24 + 7).astype(np.int32)
+            # 5d: 가격 0-25행 (26행), 거래량 26-31행 (6행)
+            price_pixels = (normalized_prices * 25).astype(np.int32)
             volume_pixels = (volume_normalized * 5).astype(np.int32)
         elif image_size[0] == 64:
-            price_pixels = (normalized_prices * 50 + 13).astype(np.int32)
+            # 20d: 가격 0-51행 (52행), 거래량 52-63행 (12행)
+            price_pixels = (normalized_prices * 51).astype(np.int32)
             volume_pixels = (volume_normalized * 11).astype(np.int32)
         else:  # 96
-            price_pixels = (normalized_prices * 75 + 20).astype(np.int32)
+            # 60d: 가격 0-76행 (77행), 거래량 77-95행 (19행)
+            price_pixels = (normalized_prices * 76).astype(np.int32)
             volume_pixels = (volume_normalized * 18).astype(np.int32)
         
         # 경계값 클리핑
@@ -153,8 +167,14 @@ def single_symbol_image_optimized(tabular_df, image_size, start_date, sample_rat
             not np.isnan(labels_5[d]) and not np.isnan(labels_20[d]) and not np.isnan(labels_60[d]) and
             not np.isnan(rets_5[d]) and not np.isnan(rets_20[d]) and not np.isnan(rets_60[d])):
             
+            # 시가총액과 EWMA volatility 값 (없으면 임시값)
+            market_cap_val = market_caps[d] if not np.isnan(market_caps[d]) else np.random.uniform(10000, 100000)
+            ewma_vol_val = ewma_vols[d] if not np.isnan(ewma_vols[d]) else np.random.uniform(0.0001, 0.001)
+            
+            # 11개 요소: 날짜, 종목코드, 시가총액, EWMA volatility 포함
             entry = [image, int(labels_5[d]), int(labels_20[d]), int(labels_60[d]), 
-                    rets_5[d], rets_20[d], rets_60[d]]
+                    rets_5[d], rets_20[d], rets_60[d], dates[d], df_filtered.iloc[0]['code'],
+                    market_cap_val, ewma_vol_val]
             dataset.append(entry)
             valid_dates.append(dates[d])
     
@@ -267,7 +287,7 @@ class ImageDataSetOptimized():
                 # 결과를 즉시 HDF5에 저장
                 for result in chunk_results:
                     for entry in result:
-                        if len(entry) == 7:
+                        if len(entry) == 11:  # 11개 요소 (날짜, 코드, 시가총액, EWMA 포함)
                             # 동적 크기 조정
                             if image_idx >= images_dataset.shape[0]:
                                 images_dataset.resize((image_idx + chunk_size * 100, *self.image_size))

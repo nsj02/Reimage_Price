@@ -1,4 +1,10 @@
+# 개발 관련 파일들 (깃허브 업로드 제외)
 CLAUDE.md
+
+# 로그 및 결과 파일들
+logs/
+results/
+models/
 __pycache__/
 *.pyc
 *.pyo
@@ -58,3 +64,9 @@ Thumbs.db
 data/*.parquet
 images/
 img_data/
+img_data_reconstructed/
+*.dat
+*.feather
+
+# 모델 임시 디렉토리 (압축 해제된 .tar 파일)
+models/*/

@@ -76,14 +76,14 @@ def decile_portfolio_backtest(model, label_type, model_file, image_days, pred_da
     print(f"모델 예측 수행 중...")
     with torch.no_grad():
         for batch_idx, batch_data in enumerate(tqdm(test_loader, desc="Predicting")):
-            images, label_5, label_20, label_60, ret5, ret20, ret60 = batch_data
+            images, label_5, label_20, label_60, ret5, ret20, ret60 = batch_data  # 원본 형식 7개 요소
             
-            # GPU로 이미지 전송
-            images = images.unsqueeze(1).float().to(device)  # [batch, 1, H, W]
+            # GPU로 이미지 전송 (모델에서 unsqueeze 처리)
+            images = images.float().to(device)  # [batch, H, W]
             
-            # 모델 예측
-            output = torch.softmax(model(images), dim=1)
-            up_probs = output[:, 1].cpu().numpy()  # 상승 확률
+            # 모델 예측 (BCE 출력)
+            output = model(images)  # 이미 Sigmoid 적용됨
+            up_probs = output.squeeze().cpu().numpy()  # 상승 확률
             
             # 라벨 선택
             if label_type == 'RET5':
@@ -96,11 +96,23 @@ def decile_portfolio_backtest(model, label_type, model_file, image_days, pred_da
                 actual_labels = label_60.numpy()
                 actual_returns = ret60.numpy()
             
-            # 배치 결과 저장
+            # 배치 결과 저장 (날짜/종목 정보 포함)
             batch_start_idx = batch_idx * test_loader.batch_size
             for i in range(len(up_probs)):
+                actual_idx = batch_start_idx + i
+                
+                # 데이터셋에서 날짜/종목 정보 가져오기
+                if hasattr(test_dataset, 'labels_df') and actual_idx < len(test_dataset.labels_df):
+                    date = test_dataset.labels_df.iloc[actual_idx]['Date']
+                    stock_id = test_dataset.labels_df.iloc[actual_idx]['StockID']
+                else:
+                    date = 0
+                    stock_id = ''
+                
                 predictions.append({
-                    'image_id': batch_start_idx + i,
+                    'image_id': actual_idx,
+                    'date': date,
+                    'stock_id': stock_id,
                     'up_prob': up_probs[i],
                     'actual_label': actual_labels[i],
                     'actual_return': actual_returns[i]
@@ -140,9 +152,28 @@ def calculate_decile_performance(df, pred_days):
             continue
             
         # 상승 확률로 decile 분류
-        day_data = day_data.sort_values('up_prob', ascending=True)
+        day_data = day_data.sort_values('up_prob', ascending=False)
         n_stocks = len(day_data)
         decile_size = n_stocks // 10
+        
+        # 🔍 디버그: 확률값 분포 출력 (첫 번째 날짜만)
+        if i == 0:  # 첫 번째 날짜에서만 출력
+            print(f"\n🔍 디버그 - 날짜 {date}:")
+            print(f"총 종목 수: {n_stocks}")
+            print(f"상승확률 범위: {day_data['up_prob'].min():.4f} ~ {day_data['up_prob'].max():.4f}")
+            print(f"상승확률 평균: {day_data['up_prob'].mean():.4f}")
+            
+            # 상위 5개 (가장 높은 상승확률)
+            top5 = day_data.head(5)
+            print(f"\n상위 5개 (높은 상승확률):")
+            for idx, row in top5.iterrows():
+                print(f"  확률: {row['up_prob']:.4f}, 실제수익률: {row['actual_return']:.4f}")
+            
+            # 하위 5개 (가장 낮은 상승확률)  
+            bottom5 = day_data.tail(5)
+            print(f"\n하위 5개 (낮은 상승확률):")
+            for idx, row in bottom5.iterrows():
+                print(f"  확률: {row['up_prob']:.4f}, 실제수익률: {row['actual_return']:.4f}")
         
         decile_returns = []
         current_weights = {}
@@ -158,20 +189,26 @@ def calculate_decile_performance(df, pred_days):
             decile_return = decile_stocks['actual_return'].mean()
             decile_returns.append(decile_return)
             
+            # 🔍 디버그: 각 decile 정보 (첫 번째 날짜만)
+            if i == 0:  # 첫 번째 날짜에서만 출력
+                prob_range = f"{decile_stocks['up_prob'].min():.4f}~{decile_stocks['up_prob'].max():.4f}"
+                print(f"Decile {decile}: 확률범위 {prob_range}, 평균수익률 {decile_return:.4f} ({decile_return*100:.2f}%)")
+            
             # 포트폴리오 가중치 저장 (동일가중)
             for _, stock in decile_stocks.iterrows():
                 weight = 1.0 / len(decile_stocks)
-                if decile == 1:  # Short
-                    current_weights[stock['code']] = -weight
-                elif decile == 10:  # Long  
-                    current_weights[stock['code']] = weight
+                if decile == 1:  # Long (높은 상승확률)
+                    current_weights[stock['stock_id']] = weight
+                elif decile == 10:  # Short (낮은 상승확률)
+                    current_weights[stock['stock_id']] = -weight
                 else:
-                    current_weights[stock['code']] = 0
+                    current_weights[stock['stock_id']] = 0
         
-        # Long-Short 수익률 (Decile 10 - Decile 1)
-        long_return = decile_returns[9]   # Decile 10
-        short_return = decile_returns[0]  # Decile 1
-        ls_return = long_return - short_return
+        # Long-Short 수익률 (Decile 1 Long + Decile 10 Short)
+        long_return = decile_returns[0]     # Decile 1 Long 포지션 (높은 상승확률)
+        short_actual_return = decile_returns[9]  # Decile 10의 실제 수익률 (낮은 상승확률)
+        short_return = -short_actual_return      # Short 포지션 수익률 (음수)
+        ls_return = long_return + short_return   # Long + Short
         
         daily_returns.append({
             'date': date,
@@ -186,6 +223,7 @@ def calculate_decile_performance(df, pred_days):
     
     if len(daily_returns) == 0:
         return None
+    
         
     returns_df = pd.DataFrame(daily_returns)
     
@@ -227,16 +265,16 @@ def calculate_decile_performance(df, pred_days):
         })
     
     # Turnover 계산 (논문 공식)
-    turnover = calculate_monthly_turnover(portfolio_weights, returns_df, pred_days)
+    turnover = calculate_monthly_turnover(portfolio_weights, daily_returns, pred_days)
     
     results = {
         'ls_sharpe_ratio': sharpe_ratio,
         'ls_annual_return': annual_return,
         'ls_annual_vol': annual_vol,
-        'long_annual_return': decile_stats[9]['annual_return'],
-        'long_sharpe_ratio': decile_stats[9]['sharpe_ratio'],
-        'short_annual_return': decile_stats[0]['annual_return'],
-        'short_sharpe_ratio': decile_stats[0]['sharpe_ratio'],
+        'long_annual_return': decile_stats[0]['annual_return'],   # Decile 1 = Long
+        'long_sharpe_ratio': decile_stats[0]['sharpe_ratio'],
+        'short_annual_return': decile_stats[9]['annual_return'], # Decile 10 = Short  
+        'short_sharpe_ratio': decile_stats[9]['sharpe_ratio'],
         'monthly_turnover': turnover,
         'total_periods': len(returns_df),
         'decile_performance': decile_stats
@@ -244,7 +282,7 @@ def calculate_decile_performance(df, pred_days):
     
     return results
 
-def calculate_monthly_turnover(portfolio_weights, returns_df, pred_days):
+def calculate_monthly_turnover(portfolio_weights, daily_returns, pred_days):
     """
     논문 공식에 따른 월간 turnover 계산:
     Turnover = (1/M) * Σ|w_{i,t+1} - w_{i,t} * (1+r_{i,t+1})| / 2
@@ -256,12 +294,22 @@ def calculate_monthly_turnover(portfolio_weights, returns_df, pred_days):
     dates = sorted(portfolio_weights.keys())
     turnovers = []
     
+    # daily_returns를 날짜별로 인덱싱할 수 있도록 딕셔너리 생성
+    returns_by_date = {}
+    for day_return in daily_returns:
+        date = day_return['date']
+        decile_returns = day_return['decile_returns']
+        returns_by_date[date] = decile_returns
+    
     for i in range(1, len(dates)):
         prev_date = dates[i-1]
         curr_date = dates[i]
         
         prev_weights = portfolio_weights[prev_date]
         curr_weights = portfolio_weights[curr_date]
+        
+        # 이전 날짜의 수익률 (다음 리밸런싱까지의 수익률)
+        prev_returns = returns_by_date.get(prev_date, [0] * 10)
         
         # 공통 종목들 찾기
         all_codes = set(prev_weights.keys()) | set(curr_weights.keys())
@@ -271,24 +319,21 @@ def calculate_monthly_turnover(portfolio_weights, returns_df, pred_days):
             w_prev = prev_weights.get(code, 0)
             w_curr = curr_weights.get(code, 0)
             
-            # 수익률은 실제로는 필요하지만 여기서는 간단히 0으로 가정
-            # 실제 구현에서는 해당 종목의 실제 수익률을 사용해야 함
-            return_rate = 0  # 임시
+            # 실제 수익률 사용 (decile별 평균 수익률로 근사)
+            if w_prev > 0:  # Long position (Decile 10)
+                return_rate = prev_returns[9] if len(prev_returns) > 9 else 0
+            elif w_prev < 0:  # Short position (Decile 1)
+                return_rate = prev_returns[0] if len(prev_returns) > 0 else 0
+            else:
+                return_rate = 0
             
             drift_weight = w_prev * (1 + return_rate)
             turnover_sum += abs(w_curr - drift_weight)
         
         turnovers.append(turnover_sum / 2)
     
-    # 월간으로 스케일링
-    if pred_days == 5:  # 주간 -> 월간 (4주)
-        monthly_turnover = np.mean(turnovers) * 4
-    elif pred_days == 20:  # 이미 월간
-        monthly_turnover = np.mean(turnovers)
-    elif pred_days == 60:  # 분기 -> 월간 (1/3)
-        monthly_turnover = np.mean(turnovers) / 3
-    else:
-        monthly_turnover = np.mean(turnovers)
+    # 월간 turnover 반환 (연간화 하지 않음)
+    monthly_turnover = np.mean(turnovers)
     
     return monthly_turnover
 
@@ -344,11 +389,11 @@ def main():
         print(f"Long-Short 연간 수익률:   {results['ls_annual_return']:.4f} ({results['ls_annual_return']*100:.2f}%)")
         print(f"Long-Short 연간 변동성:   {results['ls_annual_vol']:.4f} ({results['ls_annual_vol']*100:.2f}%)")
         print(f"")
-        print(f"Long (Decile 10) 성과:")
+        print(f"Long (Decile 1) 성과:")
         print(f"  연간 수익률:            {results['long_annual_return']:.4f} ({results['long_annual_return']*100:.2f}%)")
         print(f"  Sharpe Ratio:          {results['long_sharpe_ratio']:.2f}")
         print(f"")
-        print(f"Short (Decile 1) 성과:")
+        print(f"Short (Decile 10) 성과:")
         print(f"  연간 수익률:            {results['short_annual_return']:.4f} ({results['short_annual_return']*100:.2f}%)")
         print(f"  Sharpe Ratio:          {results['short_sharpe_ratio']:.2f}")
         print(f"")

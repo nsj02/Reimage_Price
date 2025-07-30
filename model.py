@@ -18,7 +18,7 @@ class CNN5d(nn.Module):
     5일 윈도우 캔들차트 이미지 분석용 CNN 모델
     
     입력: [배치크기, 1, 32, 15] - 32픽셀 높이 × 15픽셀 너비 (5일×3픽셀)
-    출력: [배치크기, 2] - 상승(1) 또는 하락(0) 확률
+    출력: [배치크기, 1] - 상승 확률 (BCE용 단일 출력)
     
     구조: 2개의 합성곱 블록 + 완전연결층
     """
@@ -56,9 +56,9 @@ class CNN5d(nn.Module):
 
         # === 분류층: 특징을 최종 예측으로 변환 ===
         self.DropOut = nn.Dropout(p=0.5)      # 50% 드롭아웃으로 과적합 방지
-        self.FC = nn.Linear(15360, 2)          # 128×8×15 = 15,360 → 2개 클래스
+        self.FC = nn.Linear(15360, 1)          # 128×8×15 = 15,360 → 1개 출력 (BCE용)
         self.init_weights(self.FC)
-        self.Softmax = nn.Softmax(dim=1)       # 확률값으로 변환 (합이 1)
+        self.Sigmoid = nn.Sigmoid()            # 0~1 확률값으로 변환
 
     def forward(self, x):
         """
@@ -68,7 +68,7 @@ class CNN5d(nn.Module):
             x: 입력 이미지 [배치크기, 32, 15]
             
         Returns:
-            예측 확률 [배치크기, 2] - [하락확률, 상승확률]
+            상승 확률 [배치크기, 1] - BCE용 단일 출력 (0=하락, 1=상승)
         """
         # 채널 차원 추가: [N, 32, 15] → [N, 1, 32, 15] (흑백 이미지)
         x = x.unsqueeze(1).to(torch.float32)
@@ -79,8 +79,8 @@ class CNN5d(nn.Module):
         
         # 분류 과정
         x = self.DropOut(x.view(x.shape[0], -1))  # 1차원으로 펼치고 드롭아웃 적용
-        x = self.FC(x)                            # [N, 2] 최종 예측값
-        x = self.Softmax(x)                       # 확률로 변환
+        x = self.FC(x)                            # [N, 1] 최종 예측값
+        x = self.Sigmoid(x)                       # 0~1 확률로 변환
         
         return x
     
@@ -91,7 +91,7 @@ class CNN20d(nn.Module):
     20일 윈도우 캔들차트 이미지 분석용 CNN 모델
     
     입력: [배치크기, 1, 64, 60] - 64픽셀 높이 × 60픽셀 너비 (20일×3픽셀)
-    출력: [배치크기, 2] - 상승(1) 또는 하락(0) 확률
+    출력: [배치크기, 1] - 상승 확률 (BCE용 단일 출력)
     
     구조: 3개의 합성곱 블록 + 완전연결층
     - 더 큰 이미지를 처리하므로 CNN5d보다 하나의 합성곱 블록 추가
@@ -139,9 +139,9 @@ class CNN20d(nn.Module):
 
         # === 분류층: 추출된 특징을 최종 예측으로 변환 ===
         self.DropOut = nn.Dropout(p=0.5)      # 과적합 방지
-        self.FC = nn.Linear(46080, 2)          # 256×3×60 = 46,080 → 2개 클래스
+        self.FC = nn.Linear(46080, 1)          # 256×3×60 = 46,080 → 1개 출력 (BCE용)
         self.init_weights(self.FC)
-        self.Softmax = nn.Softmax(dim=1)       # 확률 변환
+        self.Sigmoid = nn.Sigmoid()            # 0~1 확률값으로 변환
 
     def forward(self, x):
         """
@@ -151,7 +151,7 @@ class CNN20d(nn.Module):
             x: 입력 이미지 [배치크기, 64, 60]
             
         Returns:
-            예측 확률 [배치크기, 2] - [하락확률, 상승확률]
+            상승 확률 [배치크기, 1] - BCE용 단일 출력 (0=하락, 1=상승)
         """
         # 채널 차원 추가: [N, 64, 60] → [N, 1, 64, 60] (흑백 이미지)
         x = x.unsqueeze(1).to(torch.float32)
@@ -163,8 +163,8 @@ class CNN20d(nn.Module):
         
         # 최종 분류
         x = self.DropOut(x.view(x.shape[0], -1))  # 1차원으로 펼치고 드롭아웃
-        x = self.FC(x)                            # [N, 2] 최종 분류
-        x = self.Softmax(x)                       # 확률 변환
+        x = self.FC(x)                            # [N, 1] 최종 분류
+        x = self.Sigmoid(x)                       # 0~1 확률로 변환
         
         return x
 
@@ -174,7 +174,7 @@ class CNN60d(nn.Module):
     60일 윈도우 캔들차트 이미지 분석용 CNN 모델
     
     입력: [배치크기, 1, 96, 180] - 96픽셀 높이 × 180픽셀 너비 (60일×3픽셀)
-    출력: [배치크기, 2] - 상승(1) 또는 하락(0) 확률
+    출력: [배치크기, 1] - 상승 확률 (BCE용 단일 출력)
     
     구조: 4개의 합성곱 블록 + 완전연결층
     - 가장 큰 이미지를 처리하므로 4개의 합성곱 블록 사용
@@ -230,9 +230,9 @@ class CNN60d(nn.Module):
 
         # === 분류층: 추출된 특징을 최종 예측으로 변환 ===
         self.DropOut = nn.Dropout(p=0.5)      # 과적합 방지
-        self.FC = nn.Linear(184320, 2)         # 512×2×180 = 184,320 → 2개 클래스
+        self.FC = nn.Linear(184320, 1)         # 512×2×180 = 184,320 → 1개 출력 (BCE용)
         self.init_weights(self.FC)
-        self.Softmax = nn.Softmax(dim=1)       # 확률 변환
+        self.Sigmoid = nn.Sigmoid()            # 0~1 확률값으로 변환
 
     def forward(self, x):
         """
@@ -242,7 +242,7 @@ class CNN60d(nn.Module):
             x: 입력 이미지 [배치크기, 96, 180]
             
         Returns:
-            예측 확률 [배치크기, 2] - [하락확률, 상승확률]
+            상승 확률 [배치크기, 1] - BCE용 단일 출력 (0=하락, 1=상승)
         """
         # 채널 차원 추가: [N, 96, 180] → [N, 1, 96, 180] (흑백 이미지)
         x = x.unsqueeze(1).to(torch.float32)
@@ -255,8 +255,8 @@ class CNN60d(nn.Module):
         
         # 최종 분류
         x = self.DropOut(x.view(x.shape[0], -1))  # 1차원으로 펼치고 드롭아웃
-        x = self.FC(x)                            # [N, 2] 최종 분류
-        x = self.Softmax(x)                       # 확률 변환
+        x = self.FC(x)                            # [N, 1] 최종 분류
+        x = self.Sigmoid(x)                       # 0~1 확률로 변환
         
         return x
     

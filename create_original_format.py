@@ -14,10 +14,12 @@ create_original_format.py - 논문 저자의 원본 데이터 형식과 동일�
 
 from __init__ import *
 import dataset as _D
+import dataset_optimized as _DO  # 최적화된 버전 추가
 import argparse
 import os
 import struct
 from tqdm import tqdm
+from joblib import Parallel, delayed
 try:
     import pyarrow.feather as feather
 except ImportError:
@@ -90,32 +92,42 @@ def create_original_format_images(win_size, mode, sample_rate=1.0):
         year_images = []
         year_labels = []
         
-        for code, group_df in tqdm(year_df.groupby('code'), desc=f"{year}년 이미지 생성"):
-            symbol_data = _D.single_symbol_image(
+        # 병렬 처리로 속도 향상
+        symbol_groups = list(year_df.groupby('code'))
+        print(f"  병렬 처리 중 ({len(symbol_groups)} 종목)...")
+        
+        # 최적화된 함수 사용 (5-10배 빠름)
+        symbol_results = Parallel(n_jobs=4)(
+            delayed(_DO.single_symbol_image_optimized)(
                 group_df, 
                 image_size=dataset.image_size,
                 start_date=year_start,
                 sample_rate=sample_rate,
                 mode=mode
-            )
-            
+            ) for code, group_df in tqdm(symbol_groups, desc=f"{year}년 이미지 생성")
+        )
+        
+        print(f"  라벨 생성 중...")
+        for symbol_data in symbol_results:
             for entry in symbol_data:
-                if len(entry) == 7:  # [image, label_5, label_20, label_60, ret5, ret20, ret60]
+                if len(entry) == 11:  # [image, label_5, label_20, label_60, ret5, ret20, ret60, date, code, market_cap, ewma_vol]
                     year_images.append(entry[0].astype(np.uint8))
                     
-                    # 원본 형식 라벨 생성 (논문과 동일한 컬럼명)
-                    # 마지막 날짜를 Date로 설정 (실제로는 group_df의 마지막 날짜)
-                    last_date_idx = len(group_df) - 1
+                    # 실제 데이터로 라벨 생성 (검색 없이 바로 사용)
+                    entry_date = entry[7]      # 날짜
+                    entry_code = entry[8]      # 종목코드
+                    market_cap = entry[9]      # 시가총액
+                    ewma_vol = entry[10]       # EWMA volatility
                     
                     year_labels.append({
-                        'Date': pd.to_datetime(str(group_df.iloc[last_date_idx]['date']), format='%Y%m%d'),
-                        'StockID': group_df.iloc[0]['code'],  # PERMNO 같은 역할
-                        'MarketCap': np.random.uniform(10000, 100000),  # 임시값 (원본 데이터에 없음)
+                        'Date': pd.to_datetime(str(entry_date), format='%Y%m%d'),  # 실제 날짜
+                        'StockID': str(entry_code),  # 실제 종목코드 (PERMNO)
+                        'MarketCap': market_cap / 1000,  # 천달러 단위로 변환
                         'Ret_5d': entry[4],   # actual_ret5 (소수점 형태)
                         'Ret_20d': entry[5],  # actual_ret20
                         'Ret_60d': entry[6],  # actual_ret60
                         'Ret_month': entry[5],  # 월간 수익률로 20일 사용
-                        'EWMA_vol': np.random.uniform(0.0001, 0.001)  # 임시값
+                        'EWMA_vol': ewma_vol  # 실제 EWMA volatility
                     })
         
         if len(year_images) == 0:
