@@ -6,7 +6,7 @@ ensemble_train.py - Paper-style 5-model ensemble training
 Implements ensemble method by training the same model 5 times independently
 to reduce variability of stochastic optimization as mentioned in the paper
 
-사용법:
+Usage:
     python ensemble_train.py --model CNN5d --image_days 5 --pred_days 5 --ensemble_runs 5
 """
 
