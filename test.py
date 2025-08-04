@@ -154,7 +154,7 @@ def ensemble_predict(models, test_loader):
     
     return predictions
 
-def decile_portfolio_backtest(model_class, label_type, model_name, image_days, pred_days, use_original_format=False, ensemble=False, num_models=5):
+def decile_portfolio_backtest(model_class, label_type, model_name, image_days, pred_days, use_original_format=False, ensemble=False, num_models=5, data_version='original'):
     """
     Decile portfolio backtesting with single model or ensemble
     """
@@ -189,7 +189,8 @@ def decile_portfolio_backtest(model_class, label_type, model_name, image_days, p
         test_dataset = _D.load_original_dataset(
             win_size=image_days,
             mode='test',
-            label_type=label_type
+            label_type=label_type,
+            data_version=data_version
         )
         if test_dataset is None:
             print(f"Original format test data not available.")
@@ -460,6 +461,9 @@ def main():
                        help='Number of ensemble models (default: 5)')
     parser.add_argument('--use_original_format', action='store_true',
                        help='Use original format (.dat + .feather)')
+    parser.add_argument('--data_version', type=str, default='original',
+                       choices=['original', 'filled'],
+                       help='Data version: original (with missing values) or filled (missing values filled)')
     
     args = parser.parse_args()
     
@@ -473,13 +477,17 @@ def main():
     model_class = model_classes[args.model]
     label_type = f'RET{args.pred_days}'
     
+    # Add data version to model name
+    version_suffix = "_filled" if args.data_version == 'filled' else ""
+    base_model_name = f"{args.model}_I{args.image_days}R{args.pred_days}{version_suffix}"
+    
     if args.ensemble:
-        model_name = f"{args.model}_I{args.image_days}R{args.pred_days}"
-        result_file = f"results/{model_name}_ensemble_performance.json"
+        model_name = base_model_name
+        result_file = f"results/{base_model_name}_ensemble_performance.json"
         print_prefix = "Ensemble"
     else:
-        model_name = f"{args.model}_I{args.image_days}R{args.pred_days}"
-        result_file = f"results/{model_name}_single_performance.json"
+        model_name = base_model_name
+        result_file = f"results/{base_model_name}_single_performance.json"
         print_prefix = "Single Model"
     
     # Perform backtesting
@@ -491,7 +499,8 @@ def main():
         pred_days=args.pred_days,
         use_original_format=args.use_original_format,
         ensemble=args.ensemble,
-        num_models=args.num_models
+        num_models=args.num_models,
+        data_version=args.data_version
     )
     
     if results:

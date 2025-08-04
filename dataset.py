@@ -184,13 +184,14 @@ class ImageDataSet():
     Main class to convert stock price data to candlestick chart images
     """
     
-    def __init__(self, win_size, mode, label, parallel_num=-1):
+    def __init__(self, win_size, mode, label, parallel_num=-1, data_version='original'):
         """
         Args:
-            win_size (int): 윈도우 크기 (5, 20, 60)
-            mode (str): 모드 ('train', 'test', 'inference')
-            label (str): 라벨 타입 ('RET5', 'RET20', 'RET60')
-            parallel_num (int): 병렬 처리 수
+            win_size (int): Window size (5, 20, 60)
+            mode (str): Mode ('train', 'test', 'inference')
+            label (str): Label type ('RET5', 'RET20', 'RET60')
+            parallel_num (int): Parallel processing count
+            data_version (str): Data version ('original' or 'filled')
         """
         
         # Period setup
@@ -223,11 +224,13 @@ class ImageDataSet():
         self.mode = mode
         self.label = label
         self.parallel_num = parallel_num
+        self.data_version = data_version
         
         self.load_data()
         
         print(f"Dataset initialization completed")
         print(f"  Mode: {self.mode}")
+        print(f"  Data version: {self.data_version}")
         print(f"  Image size: {self.image_size}")
         print(f"  Period: {self.start_date} ~ {self.end_date}")
         print(f"  Label: {self.label}")
@@ -235,13 +238,20 @@ class ImageDataSet():
     @_U.timer('Load data', '8')
     def load_data(self):
         """
-        Load WRDS CRSP data
+        Load WRDS CRSP data with version selection
         """
         
+        # Select data file based on mode and version
         if self.mode in ['train']:
-            data_file = 'data/data_1993_2000_train_val.parquet'
+            if self.data_version == 'filled':
+                data_file = 'data/data_1993_2000_train_val_filled.parquet'
+            else:
+                data_file = 'data/data_1993_2000_train_val.parquet'
         elif self.mode in ['test', 'inference']:
-            data_file = 'data/data_2001_2019_test.parquet'
+            if self.data_version == 'filled':
+                data_file = 'data/data_2001_2019_test_filled.parquet'
+            else:
+                data_file = 'data/data_2001_2019_test.parquet'
         
         if not os.path.exists(data_file):
             print(f"Data file does not exist: {data_file}")
@@ -315,16 +325,18 @@ class OriginalFormatDataset(torch.utils.data.Dataset):
         └── ...
     """
     
-    def __init__(self, win_size, mode, label_type):
+    def __init__(self, win_size, mode, label_type, data_version='original'):
         """
         Args:
             win_size (int): Window size (5, 20, 60)
             mode (str): 'train' or 'test'
             label_type (str): 'RET5', 'RET20', 'RET60'
+            data_version (str): 'original' or 'filled'
         """
         self.win_size = win_size
         self.mode = mode
         self.label_type = label_type
+        self.data_version = data_version
         
         # Image size configuration
         if win_size == 5:
@@ -348,7 +360,8 @@ class OriginalFormatDataset(torch.utils.data.Dataset):
         else:  # test
             self.years = range(2001, 2020)
             
-        self.base_dir = "img_data_reconstructed"
+        # Select base directory based on data version
+        self.base_dir = "img_data_reconstructed" if self.data_version == 'original' else "img_data_reconstructed_filled"
         self.data_dir = os.path.join(self.base_dir, self.dir_name)
         
         # Load data
@@ -453,7 +466,7 @@ class OriginalFormatDataset(torch.utils.data.Dataset):
         return image, label_5, label_20, label_60, ret5, ret20, ret60
 
 
-def load_original_dataset(win_size, mode, label_type):
+def load_original_dataset(win_size, mode, label_type, data_version='original'):
     """
     Convenience function to load original format dataset
     
@@ -461,12 +474,13 @@ def load_original_dataset(win_size, mode, label_type):
         win_size (int): 5, 20, 60
         mode (str): 'train', 'test'  
         label_type (str): 'RET5', 'RET20', 'RET60'
+        data_version (str): 'original' or 'filled'
         
     Returns:
         OriginalFormatDataset: Loaded dataset
     """
     try:
-        dataset = OriginalFormatDataset(win_size, mode, label_type)
+        dataset = OriginalFormatDataset(win_size, mode, label_type, data_version)
         return dataset
     except Exception as e:
         print(f"Failed to load original format dataset: {e}")

@@ -29,10 +29,12 @@ def train_single_model(args):
     print(f"Training {args.model} model")
     print(f"  Image window: {args.image_days} days")
     print(f"  Prediction period: {args.pred_days} days")
+    print(f"  Data version: {args.data_version}")
     print(f"  Device: {device}")
     
-    # Model filename
-    model_name = f"{args.model}_I{args.image_days}R{args.pred_days}"
+    # Model filename with data version
+    version_suffix = "_filled" if args.data_version == 'filled' else ""
+    model_name = f"{args.model}_I{args.image_days}R{args.pred_days}{version_suffix}"
     model_file = f"models/{model_name}.tar"
     
     # Check if model already exists
@@ -44,18 +46,18 @@ def train_single_model(args):
     # Load dataset
     if args.use_original_format:
         print(f"Loading original format dataset...")
-        train_dataset = _D.load_original_dataset(args.image_days, 'train', f'RET{args.pred_days}')
+        train_dataset = _D.load_original_dataset(args.image_days, 'train', f'RET{args.pred_days}', args.data_version)
         if train_dataset is None:
             print(f"Please generate original format images first:")
-            print(f"python datageneration.py --image_days {args.image_days} --mode train")
+            print(f"python datageneration.py --image_days {args.image_days} --mode train --data_version {args.data_version}")
             return
     else:
         print(f"Loading optimized format dataset...")
         # For now, use original format as default
-        train_dataset = _D.load_original_dataset(args.image_days, 'train', f'RET{args.pred_days}')
+        train_dataset = _D.load_original_dataset(args.image_days, 'train', f'RET{args.pred_days}', args.data_version)
         if train_dataset is None:
             print(f"Please generate images first:")
-            print(f"python datageneration.py --image_days {args.image_days} --mode train")
+            print(f"python datageneration.py --image_days {args.image_days} --mode train --data_version {args.data_version}")
             return
     
     # Train/validation split
@@ -221,8 +223,9 @@ def train_ensemble(args):
         torch.manual_seed(42 + run_idx)
         np.random.seed(42 + run_idx)
         
-        # Create ensemble-specific model name
-        model_name = f"{args.model}_I{args.image_days}R{args.pred_days}_run{run_idx}"
+        # Create ensemble-specific model name with data version
+        version_suffix = "_filled" if args.data_version == 'filled' else ""
+        model_name = f"{args.model}_I{args.image_days}R{args.pred_days}{version_suffix}_run{run_idx}"
         ensemble_model_file = f"models/{model_name}.tar"
         
         if os.path.exists(ensemble_model_file) and not args.force_retrain:
@@ -237,7 +240,7 @@ def train_ensemble(args):
             train_single_model(run_args)
             
             # Rename the generated model file
-            original_model = f"models/{args.model}_I{args.image_days}R{args.pred_days}.tar"
+            original_model = f"models/{args.model}_I{args.image_days}R{args.pred_days}{version_suffix}.tar"
             if os.path.exists(original_model):
                 os.rename(original_model, ensemble_model_file)
                 print(f"Ensemble model saved: {ensemble_model_file}")
@@ -276,6 +279,9 @@ def main():
                        help='Learning rate (default: 1e-5)')
     parser.add_argument('--use_original_format', action='store_true',
                        help='Use original format (.dat + .feather)')
+    parser.add_argument('--data_version', type=str, default='original',
+                       choices=['original', 'filled'],
+                       help='Data version: original (with missing values) or filled (missing values filled)')
     parser.add_argument('--ensemble', action='store_true',
                        help='Train ensemble of models')
     parser.add_argument('--ensemble_runs', type=int, default=5,

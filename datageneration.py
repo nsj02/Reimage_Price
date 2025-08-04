@@ -29,7 +29,7 @@ except ImportError:
         'read_feather': pd.read_feather
     })()
 
-def create_original_format_images(win_size, mode, sample_rate=1.0):
+def create_original_format_images(win_size, mode, sample_rate=1.0, data_version='original'):
     """
     Generate images in original paper format
     
@@ -37,11 +37,13 @@ def create_original_format_images(win_size, mode, sample_rate=1.0):
         win_size (int): Window size (5, 20, 60)  
         mode (str): 'train' or 'test'
         sample_rate (float): Sampling rate
+        data_version (str): Data version ('original' or 'filled')
     """
     
     print(f"Starting original format image generation")
     print(f"  Window size: {win_size} days")
     print(f"  Mode: {mode}")
+    print(f"  Data version: {data_version}")
     print(f"  Sample rate: {sample_rate}")
     
     # Output directory setup (same naming convention as original)
@@ -55,7 +57,9 @@ def create_original_format_images(win_size, mode, sample_rate=1.0):
         dir_name = "quarterly_60d" 
         filename_prefix = "60d_quarter_has_vb_[60]_ma"
     
-    output_dir = f"img_data_reconstructed/{dir_name}"
+    # Add data version to output directory
+    base_dir = "img_data_reconstructed" if data_version == 'original' else "img_data_reconstructed_filled"
+    output_dir = f"{base_dir}/{dir_name}"
     os.makedirs(output_dir, exist_ok=True)
     
     # Dataset creation
@@ -64,7 +68,8 @@ def create_original_format_images(win_size, mode, sample_rate=1.0):
         win_size=win_size,
         mode=mode,
         label=f'RET{win_size}',  # ImageDataSet에서 지원하는 형식
-        parallel_num=4
+        parallel_num=4,
+        data_version=data_version
     )
     
     # Generate and save images by year
@@ -258,6 +263,9 @@ def main():
                        help='Dataset mode')
     parser.add_argument('--sample_rate', type=float, default=1.0,
                        help='Data sampling rate (default: 1.0)')
+    parser.add_argument('--data_version', type=str, default='original',
+                       choices=['original', 'filled'],
+                       help='Data version: original (with missing values) or filled (missing values filled with previous close)')
     parser.add_argument('--verify', action='store_true',
                        help='Perform verification after generation')
     
@@ -271,7 +279,8 @@ def main():
     create_original_format_images(
         win_size=args.image_days,
         mode=args.mode,
-        sample_rate=args.sample_rate
+        sample_rate=args.sample_rate,
+        data_version=args.data_version
     )
     
     # Perform verification
