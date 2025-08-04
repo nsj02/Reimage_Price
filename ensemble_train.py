@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ensemble_train.py - 논문 방식 5모델 앙상블 학습
+ensemble_train.py - Paper-style 5-model ensemble training
 
-논문에서 언급한 대로 동일한 모델을 5번 독립적으로 훈련하여
-확률적 최적화의 변동성을 줄이는 앙상블 방법 구현
+Implements ensemble method by training the same model 5 times independently
+to reduce variability of stochastic optimization as mentioned in the paper
 
 사용법:
     python ensemble_train.py --model CNN5d --image_days 5 --pred_days 5 --ensemble_runs 5
@@ -15,53 +15,54 @@ import os
 import argparse
 
 def main():
-    parser = argparse.ArgumentParser(description='CNN 앙상블 모델 학습')
+
+    parser = argparse.ArgumentParser(description='CNN ensemble model training')
     parser.add_argument('--model', type=str, required=True, 
                        choices=['CNN5d', 'CNN20d', 'CNN60d'],
-                       help='모델 타입')
+                       help='Model type')
     parser.add_argument('--image_days', type=int, required=True,
                        choices=[5, 20, 60],
-                       help='이미지 윈도우 크기 (일)')
+                       help='Image window size (days)')
     parser.add_argument('--pred_days', type=int, required=True,
                        choices=[5, 20, 60], 
-                       help='예측 기간 (일)')
+                       help='Prediction period (days)')
     parser.add_argument('--ensemble_runs', type=int, default=5,
-                       help='앙상블 실행 횟수 (논문: 5회, default: 5회)')
+                       help='Number of ensemble runs (paper: 5 runs, default: 5)')
     parser.add_argument('--use_original_format', action='store_true',
-                       help='원본 형식 (.dat + .feather) 사용')
+                       help='Use original format (.dat + .feather)')
     parser.add_argument('--batch_size', type=int, default=128,
-                       help='배치 크기 (default: 128)')
+                       help='Batch size (default: 128)')
     parser.add_argument('--epochs', type=int, default=100,
-                       help='최대 에포크 (default: 100)')
+                       help='Maximum epochs (default: 100)')
     parser.add_argument('--lr', type=float, default=1e-5,
-                       help='학습률 (default: 1e-5)')
+                       help='Learning rate (default: 1e-5)')
     
     args = parser.parse_args()
     
-    print(f"🔥 논문 방식 앙상블 학습 시작")
-    print(f"   모델: {args.model}")
-    print(f"   앙상블 실행: {args.ensemble_runs}회")
-    print(f"   이미지 윈도우: {args.image_days}일")
-    print(f"   예측 기간: {args.pred_days}일")
+    print(f"Paper-style ensemble training started")
+    print(f"   Model: {args.model}")
+    print(f"   Ensemble runs: {args.ensemble_runs} times")
+    print(f"   Image window: {args.image_days} days")
+    print(f"   Prediction period: {args.pred_days} days")
     
-    # 각 앙상블 실행
+    # Run each ensemble iteration
     successful_runs = 0
     for run_idx in range(1, args.ensemble_runs + 1):
         print(f"\n{'='*70}")
-        print(f"🧠 앙상블 실행 {run_idx}/{args.ensemble_runs}")
+        print(f"Ensemble run {run_idx}/{args.ensemble_runs}")
         print(f"{'='*70}")
         
-        # 모델 파일명 (앙상블용)
+        # Model filename (for ensemble)
         model_name = f"{args.model}_I{args.image_days}R{args.pred_days}_run{run_idx}"
         model_file = f"models/{model_name}.tar"
         
-        # 이미 훈련된 모델 확인
+        # Check for already trained model
         if os.path.exists(model_file):
-            print(f"✅ 이미 훈련된 모델: {model_file}")
+            print(f"Already trained model: {model_file}")
             successful_runs += 1
             continue
         
-        # main.py 실행 명령어 구성
+        # Construct main.py execution command
         cmd = [
             'python', 'main.py',
             '--model', args.model,
@@ -76,43 +77,43 @@ def main():
             cmd.append('--use_original_format')
         
         try:
-            # 독립적인 학습 실행 (별도의 랜덤 시드로)
-            print(f"실행 명령어: {' '.join(cmd)}")
+            # Execute independent training (with separate random seed)
+            print(f"Execution command: {' '.join(cmd)}")
             result = subprocess.run(cmd, check=True, capture_output=False)
             
-            # 생성된 모델 파일을 앙상블용으로 이름 변경
+            # Rename generated model file for ensemble
             original_model = f"models/{args.model}_I{args.image_days}R{args.pred_days}.tar"
             if os.path.exists(original_model):
                 os.rename(original_model, model_file)
-                print(f"✅ 모델 저장: {model_file}")
+                print(f"Model saved: {model_file}")
                 successful_runs += 1
             else:
-                print(f"❌ 모델 파일을 찾을 수 없습니다: {original_model}")
+                print(f"Model file not found: {original_model}")
                 
         except subprocess.CalledProcessError as e:
-            print(f"❌ 앙상블 실행 {run_idx} 실패: {e}")
+            print(f"Ensemble run {run_idx} failed: {e}")
             continue
     
     print(f"\n{'='*70}")
-    print(f"🎯 앙상블 학습 완료")
-    print(f"   성공한 실행: {successful_runs}/{args.ensemble_runs}")
-    print(f"   저장된 모델들:")
+    print(f"Ensemble training completed")
+    print(f"   Successful runs: {successful_runs}/{args.ensemble_runs}")
+    print(f"   Saved models:")
     
-    # 생성된 모델 파일들 확인
+    # Check generated model files
     for run_idx in range(1, args.ensemble_runs + 1):
         model_name = f"{args.model}_I{args.image_days}R{args.pred_days}_run{run_idx}"
         model_file = f"models/{model_name}.tar"
         if os.path.exists(model_file):
             file_size = os.path.getsize(model_file) / (1024**2)
-            print(f"     ✅ {model_name}.tar ({file_size:.1f}MB)")
+            print(f"     {model_name}.tar ({file_size:.1f}MB)")
     
     if successful_runs >= 1:
-        print(f"\n🚀 앙상블 모델 준비 완료!")
-        print(f"이제 ensemble_test.py로 앙상블 예측을 수행하세요:")
+        print(f"\nEnsemble models ready!")
+        print(f"Now run ensemble prediction with ensemble_test.py:")
         print(f"python ensemble_test.py --model {args.model} --image_days {args.image_days} --pred_days {args.pred_days}" + 
               (" --use_original_format" if args.use_original_format else ""))
     else:
-        print(f"❌ 앙상블 학습 실패")
+        print(f"Ensemble training failed")
 
 if __name__ == '__main__':
     main()

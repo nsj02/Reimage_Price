@@ -14,17 +14,33 @@ For Google Colab environment:
 ```
 
 ### 1. Data Preparation
-Generate WRDS CRSP data using the provided notebook:
+Generate candlestick images from stock data:
 ```bash
-# Run data generation notebook
-jupyter notebook data/datageneration.ipynb
+# Generate images for all time windows
+python datageneration.py --image_days 5 --mode train
+python datageneration.py --image_days 5 --mode test
+python datageneration.py --image_days 20 --mode train  
+python datageneration.py --image_days 20 --mode test
+python datageneration.py --image_days 60 --mode train
+python datageneration.py --image_days 60 --mode test
 ```
 
 ### 2. Model Training
-Train models using the paper's fixed train/test split:
+Train models (single or ensemble):
 ```bash
-# 5-day models
-python main.py --model CNN5d --image_days 5 --pred_days 5
+# Single model training
+python train.py --model CNN20d --image_days 20 --pred_days 20 --use_original_format
+
+# Ensemble training (paper method: 5 independent runs)
+python train.py --model CNN20d --image_days 20 --pred_days 20 --ensemble --ensemble_runs 5 --use_original_format
+### 3. Model Evaluation
+Evaluate with decile portfolio backtesting:
+```bash
+# Single model evaluation  
+python test.py --model CNN20d --image_days 20 --pred_days 20 --use_original_format
+
+# Ensemble evaluation
+python test.py --model CNN20d --image_days 20 --pred_days 20 --ensemble --use_original_format
 
 # 20-day models  
 python main.py --model CNN20d --image_days 20 --pred_days 20

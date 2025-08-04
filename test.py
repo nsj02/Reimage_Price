@@ -1,186 +1,291 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-test.py - 논문 방식 Decile 포트폴리오 성능 평가
+test.py - CNN model evaluation with optional ensemble support
 
-논문에서 사용한 방식대로 구현:
-1. 상승 확률로 종목을 10개 decile로 분류
-2. Decile 10 (Long) vs Decile 1 (Short) 전략
-3. 연간화된 Sharpe ratio, 수익률, 월간 turnover 계산
+Evaluate single model or ensemble models with decile portfolio backtesting
 
-사용법:
+Usage:
+    # Single model evaluation
     python test.py --model CNN5d --image_days 5 --pred_days 5
+    
+    # Ensemble evaluation (paper method: average 5 independent predictions)
+    python test.py --model CNN5d --image_days 5 --pred_days 5 --ensemble
 """
+
 from __init__ import *
 import model as _M
 import dataset as _D
-import dataset_original as _D_ORIG
 import argparse
-import json
+import numpy as np
+from tqdm import tqdm
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-def decile_portfolio_backtest(model, label_type, model_file, image_days, pred_days, use_original_format=False):
+def load_single_model(model_class, model_name):
     """
-    논문 방식 decile 포트폴리오 백테스팅
+    Load a single trained model
     """
+    model_file = f"models/{model_name}.tar"
     
-    print(f"모델 로드: {model_file}")
     if not os.path.exists(model_file):
-        print(f"모델 파일이 존재하지 않습니다: {model_file}")
+        print(f"Model file not found: {model_file}")
         return None
     
-    state_dict = torch.load(model_file, map_location=device)
-    model.load_state_dict(state_dict['model_state_dict'])
-    model.eval()
+    try:
+        model = model_class()
+        state_dict = torch.load(model_file, map_location=device)
+        model.load_state_dict(state_dict['model_state_dict'])
+        model.eval()
+        model.to(device)
+        print(f"Model loaded: {model_file}")
+        return model
+    except Exception as e:
+        print(f"Failed to load model: {e}")
+        return None
+
+
+def load_ensemble_models(model_class, model_base_name, num_models=5):
+    """
+    Load ensemble models and return as list
+    """
+    models = []
+    loaded_count = 0
     
-    # 테스트 데이터셋 로드 (원본 형식 vs 최적화 형식)
+    for run_idx in range(1, num_models + 1):
+        model_file = f"models/{model_base_name}_run{run_idx}.tar"
+        
+        if os.path.exists(model_file):
+            try:
+                model = model_class()
+                state_dict = torch.load(model_file, map_location=device)
+                model.load_state_dict(state_dict['model_state_dict'])
+                model.eval()
+                model.to(device)
+                models.append(model)
+                loaded_count += 1
+                print(f"Ensemble model {run_idx} loaded: {model_file}")
+            except Exception as e:
+                print(f"Failed to load ensemble model {run_idx}: {e}")
+        else:
+            print(f"Ensemble model file not found: {model_file}")
+    
+    print(f"Total {loaded_count} ensemble models loaded")
+    return models
+
+def single_model_predict(model, test_loader):
+    """
+    Perform prediction with a single model
+    """
+    predictions = []
+    
+    print(f"Single model prediction...")
+    
+    with torch.no_grad():
+        for batch_idx, batch_data in enumerate(tqdm(test_loader, desc="Single Model Predicting")):
+            images, label_5, label_20, label_60, ret5, ret20, ret60 = batch_data
+            
+            # Send images to device
+            images = images.float().to(device)  # [batch, H, W]
+            
+            # Model prediction (BCE method)
+            output = model(images)  # Already has Sigmoid applied
+            up_probs = output.squeeze().cpu().numpy()  # Up probability
+            
+            # Store batch results
+            batch_start_idx = batch_idx * test_loader.batch_size
+            for i in range(len(up_probs)):
+                predictions.append({
+                    'image_id': batch_start_idx + i,
+                    'up_prob': up_probs[i],
+                    'actual_label_5': label_5[i].item(),
+                    'actual_label_20': label_20[i].item(),
+                    'actual_label_60': label_60[i].item(),
+                    'actual_ret5': ret5[i].item(),
+                    'actual_ret20': ret20[i].item(),
+                    'actual_ret60': ret60[i].item()
+                })
+    
+    return predictions
+
+
+def ensemble_predict(models, test_loader):
+    """
+    Perform ensemble prediction by averaging multiple models
+    """
+    predictions = []
+    num_models = len(models)
+    
+    if num_models == 0:
+        raise ValueError("No models loaded!")
+    
+    print(f"Ensemble prediction ({num_models} models)...")
+    
+    with torch.no_grad():
+        for batch_idx, batch_data in enumerate(tqdm(test_loader, desc="Ensemble Predicting")):
+            images, label_5, label_20, label_60, ret5, ret20, ret60 = batch_data
+            
+            # Send images to device
+            images = images.float().to(device)  # [batch, H, W]
+            
+            # Collect predictions from all models (BCE method)
+            batch_predictions = []
+            for model in models:
+                output = model(images)  # Already has Sigmoid applied
+                up_probs = output.squeeze().cpu().numpy()  # Up probability
+                batch_predictions.append(up_probs)
+            
+            # Ensemble average (paper method)
+            ensemble_up_probs = np.mean(batch_predictions, axis=0)
+            
+            # Store batch results
+            batch_start_idx = batch_idx * test_loader.batch_size
+            for i in range(len(ensemble_up_probs)):
+                predictions.append({
+                    'image_id': batch_start_idx + i,
+                    'up_prob': ensemble_up_probs[i],
+                    'actual_label_5': label_5[i].item(),
+                    'actual_label_20': label_20[i].item(),
+                    'actual_label_60': label_60[i].item(),
+                    'actual_ret5': ret5[i].item(),
+                    'actual_ret20': ret20[i].item(),
+                    'actual_ret60': ret60[i].item()
+                })
+    
+    return predictions
+
+def decile_portfolio_backtest(model_class, label_type, model_name, image_days, pred_days, use_original_format=False, ensemble=False, num_models=5):
+    """
+    Decile portfolio backtesting with single model or ensemble
+    """
+    
+    if ensemble:
+        print(f"Ensemble backtesting started")
+        print(f"   Model: {model_name}")
+        print(f"   Ensemble models: {num_models}")
+        print(f"   Label type: {label_type}")
+        
+        # Load ensemble models
+        models = load_ensemble_models(model_class, model_name, num_models)
+        
+        if len(models) == 0:
+            print("No ensemble models loaded. Run train.py with --ensemble first.")
+            return None
+    else:
+        print(f"Single model backtesting started")
+        print(f"   Model: {model_name}")
+        print(f"   Label type: {label_type}")
+        
+        # Load single model
+        model = load_single_model(model_class, model_name)
+        
+        if model is None:
+            print("No model loaded. Run train.py first.")
+            return None
+    
+    # Load test dataset
     if use_original_format:
-        print(f"원본 형식 테스트 데이터셋 로드 중...")
-        test_dataset = _D_ORIG.load_original_dataset(
+        print(f"Loading original format test dataset...")
+        test_dataset = _D.load_original_dataset(
             win_size=image_days,
             mode='test',
             label_type=label_type
         )
         if test_dataset is None:
-            print(f"다음 명령어로 원본 형식 테스트 이미지를 먼저 생성하세요:")
-            print(f"python create_original_format.py --image_days {image_days} --mode test")
+            print(f"Original format test data not available.")
             return None
     else:
-        # 사전 생성된 테스트 이미지 확인
-        test_image_dir = f"images/test_I{image_days}R{pred_days}"
-        metadata_file = os.path.join(test_image_dir, 'metadata.csv')
-        
-        if not os.path.exists(metadata_file):
-            print(f"❌ 사전 생성된 테스트 이미지가 없습니다: {test_image_dir}")
-            print(f"다음 명령어로 테스트 이미지를 먼저 생성하세요:")
-            print(f"python create_images.py --image_days {image_days} --mode test --pred_days {pred_days}")
-            return None
-        
-        # 사전 생성된 테스트 이미지 로드
-        print(f"사전 생성된 테스트 이미지 로드 중: {test_image_dir}")
-        test_dataset = _D.PrecomputedImageDataset(
-            image_dir=test_image_dir,
-            label_type=label_type
-        )
+        print("HDF5 format is no longer supported. Please use --use_original_format.")
+        return None
     
-    print(f"로드된 테스트 이미지: {len(test_dataset):,}개")
-    
-    # DataLoader로 배치 단위 예측
+    # Test data loader
     test_loader = torch.utils.data.DataLoader(
-        test_dataset, batch_size=128, shuffle=False
+        test_dataset, batch_size=256, shuffle=False  # Large batch size for prediction only
     )
     
-    predictions = []
+    print(f"Test data: {len(test_dataset):,} samples")
     
-    print(f"모델 예측 수행 중...")
-    with torch.no_grad():
-        for batch_idx, batch_data in enumerate(tqdm(test_loader, desc="Predicting")):
-            images, label_5, label_20, label_60, ret5, ret20, ret60 = batch_data  # 원본 형식 7개 요소
-            
-            # GPU로 이미지 전송 (모델에서 unsqueeze 처리)
-            images = images.float().to(device)  # [batch, H, W]
-            
-            # 모델 예측 (BCE 출력)
-            output = model(images)  # 이미 Sigmoid 적용됨
-            up_probs = output.squeeze().cpu().numpy()  # 상승 확률
-            
-            # 라벨 선택
-            if label_type == 'RET5':
-                actual_labels = label_5.numpy()
-                actual_returns = ret5.numpy()
-            elif label_type == 'RET20':
-                actual_labels = label_20.numpy()  
-                actual_returns = ret20.numpy()
-            else:  # RET60
-                actual_labels = label_60.numpy()
-                actual_returns = ret60.numpy()
-            
-            # 배치 결과 저장 (날짜/종목 정보 포함)
-            batch_start_idx = batch_idx * test_loader.batch_size
-            for i in range(len(up_probs)):
-                actual_idx = batch_start_idx + i
-                
-                # 데이터셋에서 날짜/종목 정보 가져오기
-                if hasattr(test_dataset, 'labels_df') and actual_idx < len(test_dataset.labels_df):
-                    date = test_dataset.labels_df.iloc[actual_idx]['Date']
-                    stock_id = test_dataset.labels_df.iloc[actual_idx]['StockID']
-                else:
-                    date = 0
-                    stock_id = ''
-                
-                predictions.append({
-                    'image_id': actual_idx,
-                    'date': date,
-                    'stock_id': stock_id,
-                    'up_prob': up_probs[i],
-                    'actual_label': actual_labels[i],
-                    'actual_return': actual_returns[i]
-                })
+    # Perform prediction
+    if ensemble:
+        predictions = ensemble_predict(models, test_loader)
+    else:
+        predictions = single_model_predict(model, test_loader)
     
-    if len(predictions) == 0:
-        print("예측 결과가 없습니다.")
-        return None
+    print(f"Prediction completed: {len(predictions):,} samples")
+    
+    # Convert to DataFrame for portfolio backtesting
+    df_predictions = []
+    for pred in predictions:
+        # Select actual label and return based on label type
+        if label_type == 'RET5':
+            actual_label = pred['actual_label_5']
+            actual_return = pred['actual_ret5']
+        elif label_type == 'RET20':
+            actual_label = pred['actual_label_20']
+            actual_return = pred['actual_ret20']
+        else:  # RET60
+            actual_label = pred['actual_label_60']
+            actual_return = pred['actual_ret60']
         
-    df = pd.DataFrame(predictions)
-    print(f"총 예측 수: {len(df):,}개")
+        # Add date/stock information (from original dataset)
+        image_id = pred['image_id']
+        if hasattr(test_dataset, 'labels_df') and image_id < len(test_dataset.labels_df):
+            date = test_dataset.labels_df.iloc[image_id]['Date']
+            stock_id = test_dataset.labels_df.iloc[image_id]['StockID']
+        else:
+            date = image_id  # Use image_id as temporary date
+            stock_id = f'stock_{image_id}'
+        
+        df_predictions.append({
+            'image_id': image_id,
+            'date': date,
+            'stock_id': stock_id,
+            'up_prob': pred['up_prob'],
+            'actual_label': actual_label,
+            'actual_return': actual_return
+        })
     
-    # Decile 포트폴리오 백테스팅
+    df = pd.DataFrame(df_predictions)
+    print(f"Prediction DataFrame: {len(df):,} samples")
+    
+    # Calculate decile performance
     portfolio_performance = calculate_decile_performance(df, pred_days)
     
     return portfolio_performance
 
+
 def calculate_decile_performance(df, pred_days):
     """
-    논문 방식 decile 포트폴리오 성과 계산
+    Paper-style decile portfolio performance calculation
     
     Args:
-        df: 예측 결과 DataFrame
-        pred_days: 예측 기간 (리밸런싱 주기)
+        df: Prediction results DataFrame
+        pred_days: Prediction period (rebalancing frequency)
     """
     
-    # 날짜별 decile 포트폴리오 구성
+    # Build decile portfolios by date
     daily_returns = []
-    portfolio_weights = {}  # turnover 계산용
+    portfolio_weights = {}  # For turnover calculation
     
     dates = sorted(df['date'].unique())
     
     for i, date in enumerate(dates):
         day_data = df[df['date'] == date].copy()
         
-        if len(day_data) < 100:  # 최소 종목 수
+        if len(day_data) < 100:  # Minimum number of stocks
             continue
             
-        # 상승 확률로 decile 분류
+        # Classify into deciles by up probability
         day_data = day_data.sort_values('up_prob', ascending=False)
         n_stocks = len(day_data)
         decile_size = n_stocks // 10
-        
-        # 🔍 디버그: 확률값 분포 출력 (첫 번째 날짜만)
-        if i == 0:  # 첫 번째 날짜에서만 출력
-            print(f"\n🔍 디버그 - 날짜 {date}:")
-            print(f"총 종목 수: {n_stocks}")
-            print(f"상승확률 범위: {day_data['up_prob'].min():.4f} ~ {day_data['up_prob'].max():.4f}")
-            print(f"상승확률 평균: {day_data['up_prob'].mean():.4f}")
-            
-            # 상위 5개 (가장 높은 상승확률)
-            top5 = day_data.head(5)
-            print(f"\n상위 5개 (높은 상승확률):")
-            for idx, row in top5.iterrows():
-                print(f"  확률: {row['up_prob']:.4f}, 실제수익률: {row['actual_return']:.4f}")
-            
-            # 하위 5개 (가장 낮은 상승확률)  
-            bottom5 = day_data.tail(5)
-            print(f"\n하위 5개 (낮은 상승확률):")
-            for idx, row in bottom5.iterrows():
-                print(f"  확률: {row['up_prob']:.4f}, 실제수익률: {row['actual_return']:.4f}")
         
         decile_returns = []
         current_weights = {}
         
         for decile in range(1, 11):
             start_idx = (decile - 1) * decile_size
-            if decile == 10:  # 마지막 decile은 남은 모든 종목
+            if decile == 10:  # Last decile takes all remaining stocks
                 end_idx = n_stocks
             else:
                 end_idx = decile * decile_size
@@ -189,25 +294,25 @@ def calculate_decile_performance(df, pred_days):
             decile_return = decile_stocks['actual_return'].mean()
             decile_returns.append(decile_return)
             
-            # 🔍 디버그: 각 decile 정보 (첫 번째 날짜만)
-            if i == 0:  # 첫 번째 날짜에서만 출력
+            # Debug: Show decile info (first date only)
+            if i == 0:  # Only for first date
                 prob_range = f"{decile_stocks['up_prob'].min():.4f}~{decile_stocks['up_prob'].max():.4f}"
-                print(f"Decile {decile}: 확률범위 {prob_range}, 평균수익률 {decile_return:.4f} ({decile_return*100:.2f}%)")
+                print(f"Decile {decile}: Prob range {prob_range}, Avg return {decile_return:.4f} ({decile_return*100:.2f}%)")
             
-            # 포트폴리오 가중치 저장 (동일가중)
+            # Save portfolio weights (equal weight)
             for _, stock in decile_stocks.iterrows():
                 weight = 1.0 / len(decile_stocks)
-                if decile == 1:  # Long (높은 상승확률)
+                if decile == 1:  # Long (high up probability)
                     current_weights[stock['stock_id']] = weight
-                elif decile == 10:  # Short (낮은 상승확률)
+                elif decile == 10:  # Short (low up probability)
                     current_weights[stock['stock_id']] = -weight
                 else:
                     current_weights[stock['stock_id']] = 0
         
-        # Long-Short 수익률 (Decile 1 Long + Decile 10 Short)
-        long_return = decile_returns[0]     # Decile 1 Long 포지션 (높은 상승확률)
-        short_actual_return = decile_returns[9]  # Decile 10의 실제 수익률 (낮은 상승확률)
-        short_return = -short_actual_return      # Short 포지션 수익률 (음수)
+        # Long-Short returns (Decile 1 Long + Decile 10 Short)
+        long_return = decile_returns[0]     # Decile 1 Long position (high up probability)
+        short_actual_return = decile_returns[9]  # Decile 10 actual return (low up probability)
+        short_return = -short_actual_return      # Short position return (negative)
         ls_return = long_return + short_return   # Long + Short
         
         daily_returns.append({
@@ -218,28 +323,27 @@ def calculate_decile_performance(df, pred_days):
             'ls_return': ls_return
         })
         
-        # 가중치 저장
+        # Save weights
         portfolio_weights[date] = current_weights
     
     if len(daily_returns) == 0:
         return None
     
-        
     returns_df = pd.DataFrame(daily_returns)
     
-    # 논문 방식 성과 지표 계산
+    # Calculate paper-style performance metrics
     results = {}
     
-    # 기본 통계
+    # Basic statistics
     mean_ls_return = returns_df['ls_return'].mean()
     std_ls_return = returns_df['ls_return'].std()
     
-    # 연간화 (논문에서 사용하는 방식)
-    if pred_days == 5:  # 주간
+    # Annualization (paper method)
+    if pred_days == 5:  # Weekly
         annual_factor = 52
-    elif pred_days == 20:  # 월간
+    elif pred_days == 20:  # Monthly
         annual_factor = 12  
-    elif pred_days == 60:  # 분기
+    elif pred_days == 60:  # Quarterly
         annual_factor = 4
     else:
         annual_factor = 252 / pred_days
@@ -248,7 +352,7 @@ def calculate_decile_performance(df, pred_days):
     annual_vol = std_ls_return * np.sqrt(annual_factor)
     sharpe_ratio = annual_return / annual_vol if annual_vol > 0 else 0
     
-    # Decile별 성과
+    # Decile-wise performance
     decile_stats = []
     for i in range(10):
         decile_returns = [day['decile_returns'][i] for day in daily_returns]
@@ -264,7 +368,7 @@ def calculate_decile_performance(df, pred_days):
             'sharpe_ratio': decile_sharpe
         })
     
-    # Turnover 계산 (논문 공식)
+    # Turnover calculation (paper formula)
     turnover = calculate_monthly_turnover(portfolio_weights, daily_returns, pred_days)
     
     results = {
@@ -282,9 +386,10 @@ def calculate_decile_performance(df, pred_days):
     
     return results
 
+
 def calculate_monthly_turnover(portfolio_weights, daily_returns, pred_days):
     """
-    논문 공식에 따른 월간 turnover 계산:
+    Calculate monthly turnover according to paper formula:
     Turnover = (1/M) * Σ|w_{i,t+1} - w_{i,t} * (1+r_{i,t+1})| / 2
     """
     
@@ -294,7 +399,7 @@ def calculate_monthly_turnover(portfolio_weights, daily_returns, pred_days):
     dates = sorted(portfolio_weights.keys())
     turnovers = []
     
-    # daily_returns를 날짜별로 인덱싱할 수 있도록 딕셔너리 생성
+    # Create dictionary for indexing daily_returns by date
     returns_by_date = {}
     for day_return in daily_returns:
         date = day_return['date']
@@ -308,10 +413,10 @@ def calculate_monthly_turnover(portfolio_weights, daily_returns, pred_days):
         prev_weights = portfolio_weights[prev_date]
         curr_weights = portfolio_weights[curr_date]
         
-        # 이전 날짜의 수익률 (다음 리밸런싱까지의 수익률)
+        # Previous date returns (returns until next rebalancing)
         prev_returns = returns_by_date.get(prev_date, [0] * 10)
         
-        # 공통 종목들 찾기
+        # Find common stocks
         all_codes = set(prev_weights.keys()) | set(curr_weights.keys())
         
         turnover_sum = 0
@@ -319,7 +424,7 @@ def calculate_monthly_turnover(portfolio_weights, daily_returns, pred_days):
             w_prev = prev_weights.get(code, 0)
             w_curr = curr_weights.get(code, 0)
             
-            # 실제 수익률 사용 (decile별 평균 수익률로 근사)
+            # Use actual returns (approximate with decile average returns)
             if w_prev > 0:  # Long position (Decile 10)
                 return_rate = prev_returns[9] if len(prev_returns) > 9 else 0
             elif w_prev < 0:  # Short position (Decile 1)
@@ -332,93 +437,102 @@ def calculate_monthly_turnover(portfolio_weights, daily_returns, pred_days):
         
         turnovers.append(turnover_sum / 2)
     
-    # 월간 turnover 반환 (연간화 하지 않음)
+    # Return monthly turnover (not annualized)
     monthly_turnover = np.mean(turnovers)
     
     return monthly_turnover
 
+
 def main():
-    parser = argparse.ArgumentParser(description='CNN Decile 포트폴리오 성과 평가')
+    parser = argparse.ArgumentParser(description='CNN model evaluation with optional ensemble support')
     parser.add_argument('--model', type=str, required=True, 
                        choices=['CNN5d', 'CNN20d', 'CNN60d'],
-                       help='모델 타입')
+                       help='Model type')
     parser.add_argument('--image_days', type=int, required=True,
                        choices=[5, 20, 60],
-                       help='이미지 윈도우 크기')
+                       help='Image window size (days)')
     parser.add_argument('--pred_days', type=int, required=True,
                        choices=[5, 20, 60], 
-                       help='예측 기간')
+                       help='Prediction period (days)')
+    parser.add_argument('--ensemble', action='store_true',
+                       help='Use ensemble evaluation (average multiple models)')
+    parser.add_argument('--num_models', type=int, default=5,
+                       help='Number of ensemble models (default: 5)')
     parser.add_argument('--use_original_format', action='store_true',
-                       help='원본 형식 (.dat + .feather) 사용')
+                       help='Use original format (.dat + .feather)')
     
     args = parser.parse_args()
     
-    print(f"Decile 포트폴리오 백테스팅: {args.model}")
-    print(f"  이미지 윈도우: {args.image_days}일")
-    print(f"  예측 기간: {args.pred_days}일")
-    print(f"  디바이스: {device}")
+    # Model class mapping
+    model_classes = {
+        'CNN5d': _M.CNN5d,
+        'CNN20d': _M.CNN20d, 
+        'CNN60d': _M.CNN60d
+    }
     
-    # 모델 초기화
-    model_name = f"{args.model}_I{args.image_days}R{args.pred_days}"
-    model_file = f"models/{model_name}.tar"
+    model_class = model_classes[args.model]
+    label_type = f'RET{args.pred_days}'
     
-    if args.model == 'CNN5d':
-        model = _M.CNN5d()
-    elif args.model == 'CNN20d':
-        model = _M.CNN20d()
-    elif args.model == 'CNN60d':
-        model = _M.CNN60d()
+    if args.ensemble:
+        model_name = f"{args.model}_I{args.image_days}R{args.pred_days}"
+        result_file = f"results/{model_name}_ensemble_performance.json"
+        print_prefix = "Ensemble"
+    else:
+        model_name = f"{args.model}_I{args.image_days}R{args.pred_days}"
+        result_file = f"results/{model_name}_single_performance.json"
+        print_prefix = "Single Model"
     
-    model.to(device)
-    
-    # 백테스팅 실행
+    # Perform backtesting
     results = decile_portfolio_backtest(
-        model=model,
-        label_type=f'RET{args.pred_days}',
-        model_file=model_file,
+        model_class=model_class,
+        label_type=label_type,
+        model_name=model_name,
         image_days=args.image_days,
         pred_days=args.pred_days,
-        use_original_format=args.use_original_format
+        use_original_format=args.use_original_format,
+        ensemble=args.ensemble,
+        num_models=args.num_models
     )
     
     if results:
         print(f"\n{'='*60}")
-        print(f"Decile 포트폴리오 성과 ({model_name})")
+        print(f"{print_prefix} Decile Portfolio Performance ({model_name})")
         print(f"{'='*60}")
         print(f"Long-Short Sharpe Ratio:  {results['ls_sharpe_ratio']:.2f}")
-        print(f"Long-Short 연간 수익률:   {results['ls_annual_return']:.4f} ({results['ls_annual_return']*100:.2f}%)")
-        print(f"Long-Short 연간 변동성:   {results['ls_annual_vol']:.4f} ({results['ls_annual_vol']*100:.2f}%)")
+        print(f"Long-Short Annual Return: {results['ls_annual_return']:.4f} ({results['ls_annual_return']*100:.2f}%)")
+        print(f"Long-Short Annual Vol:    {results['ls_annual_vol']:.4f} ({results['ls_annual_vol']*100:.2f}%)")
         print(f"")
-        print(f"Long (Decile 1) 성과:")
-        print(f"  연간 수익률:            {results['long_annual_return']:.4f} ({results['long_annual_return']*100:.2f}%)")
-        print(f"  Sharpe Ratio:          {results['long_sharpe_ratio']:.2f}")
+        print(f"Long (Decile 1) Performance:")
+        print(f"  Annual Return:          {results['long_annual_return']:.4f} ({results['long_annual_return']*100:.2f}%)")
+        print(f"  Sharpe Ratio:           {results['long_sharpe_ratio']:.2f}")
         print(f"")
-        print(f"Short (Decile 10) 성과:")
-        print(f"  연간 수익률:            {results['short_annual_return']:.4f} ({results['short_annual_return']*100:.2f}%)")
-        print(f"  Sharpe Ratio:          {results['short_sharpe_ratio']:.2f}")
+        print(f"Short (Decile 10) Performance:")
+        print(f"  Annual Return:          {results['short_annual_return']:.4f} ({results['short_annual_return']*100:.2f}%)")
+        print(f"  Sharpe Ratio:           {results['short_sharpe_ratio']:.2f}")
         print(f"")
-        print(f"월간 Turnover:           {results['monthly_turnover']:.1f}%")
-        print(f"총 리밸런싱 기간:        {results['total_periods']:,}개")
+        print(f"Monthly Turnover:         {results['monthly_turnover']:.1f}%")
+        print(f"Total Rebalancing Periods: {results['total_periods']:,}")
+        if args.ensemble:
+            print(f"Ensemble Models:          {args.num_models}")
         print(f"{'='*60}")
         
-        # Decile별 상세 성과
-        print(f"\nDecile별 성과:")
-        print(f"{'Decile':<8}{'연간수익률':<12}{'Sharpe':<8}")
-        print(f"{'-'*28}")
+        # Detailed decile performance
+        print(f"\nDecile Performance:")
+        print(f"{'Decile':<8}{'Annual Return':<15}{'Sharpe':<8}")
+        print(f"{'-'*31}")
         for decile_stat in results['decile_performance']:
-            print(f"{decile_stat['decile']:<8}{decile_stat['annual_return']*100:>8.2f}%{decile_stat['sharpe_ratio']:>8.2f}")
+            print(f"{decile_stat['decile']:<8}{decile_stat['annual_return']*100:>11.2f}%{decile_stat['sharpe_ratio']:>8.2f}")
         
-        # 결과 저장
+        # Save results
         os.makedirs('results', exist_ok=True)
-        result_file = f"results/{model_name}_decile_performance.json"
         
+        import json
         with open(result_file, 'w') as f:
             json.dump(results, f, indent=2)
         
-        print(f"\n결과 저장: {result_file}")
-        
+        print(f"\nResults saved: {result_file}")
     else:
-        print("백테스팅 실패")
+        print(f"{print_prefix} backtesting failed")
 
 if __name__ == '__main__':
     main()

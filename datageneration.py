@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-create_original_format.py - 논문 저자의 원본 데이터 형식과 동일하게 생성
+datageneration.py - Generate images in original paper format
 
-원본 img_data/ 구조:
+Original img_data/ structure:
 - monthly_20d/20d_month_has_vb_[20]_ma_YYYY_images.dat (binary, uint8)
 - monthly_20d/20d_month_has_vb_[20]_ma_YYYY_labels_w_delay.feather
-- label_columns.txt (메타데이터)
+- label_columns.txt (metadata)
 
-사용법:
-    python create_original_format.py --image_days 20 --mode train
+Usage:
+    python datageneration.py --image_days 20 --mode train
 """
 
 from __init__ import *
 import dataset as _D
-import dataset_optimized as _DO  # 최적화된 버전 추가
 import argparse
 import os
 import struct
@@ -24,7 +23,7 @@ try:
     import pyarrow.feather as feather
 except ImportError:
     import pandas as pd
-    # pandas 내장 feather 사용
+    # Use pandas built-in feather
     feather = type('feather', (), {
         'write_feather': pd.DataFrame.to_feather,
         'read_feather': pd.read_feather
@@ -32,20 +31,20 @@ except ImportError:
 
 def create_original_format_images(win_size, mode, sample_rate=1.0):
     """
-    논문 저자의 원본 형식으로 이미지 생성
+    Generate images in original paper format
     
     Args:
-        win_size (int): 윈도우 크기 (5, 20, 60)
-        mode (str): 'train' 또는 'test'
-        sample_rate (float): 샘플링 비율
+        win_size (int): Window size (5, 20, 60)  
+        mode (str): 'train' or 'test'
+        sample_rate (float): Sampling rate
     """
     
-    print(f"🎯 원본 형식 이미지 생성 시작")
-    print(f"  윈도우 크기: {win_size}일")
-    print(f"  모드: {mode}")
-    print(f"  샘플링 비율: {sample_rate}")
+    print(f"Starting original format image generation")
+    print(f"  Window size: {win_size} days")
+    print(f"  Mode: {mode}")
+    print(f"  Sample rate: {sample_rate}")
     
-    # 출력 디렉토리 설정 (원본과 동일한 명명법)
+    # Output directory setup (same naming convention as original)
     if win_size == 5:
         dir_name = "weekly_5d"
         filename_prefix = "5d_week_has_vb_[5]_ma"
@@ -59,8 +58,8 @@ def create_original_format_images(win_size, mode, sample_rate=1.0):
     output_dir = f"img_data_reconstructed/{dir_name}"
     os.makedirs(output_dir, exist_ok=True)
     
-    # 데이터셋 생성
-    print(f"\n데이터셋 생성 중...")
+    # Dataset creation
+    print(f"\nCreating dataset...")
     dataset = _D.ImageDataSet(
         win_size=win_size,
         mode=mode,
@@ -68,13 +67,13 @@ def create_original_format_images(win_size, mode, sample_rate=1.0):
         parallel_num=4
     )
     
-    # 연도별로 이미지 생성 및 저장
+    # Generate and save images by year
     years = range(1993, 2001) if mode == 'train' else range(2001, 2020)
     
     for year in years:
-        print(f"\n📅 {year}년 데이터 처리 중...")
+        print(f"\nProcessing {year} data...")
         
-        # 해당 연도 데이터 필터링
+        # Filter data for current year
         year_start = int(f"{year}0101")
         year_end = int(f"{year}1231")
         year_df = dataset.df[
@@ -83,78 +82,78 @@ def create_original_format_images(win_size, mode, sample_rate=1.0):
         ].copy()
         
         if len(year_df) == 0:
-            print(f"  {year}년 데이터 없음, 건너뛰기")
+            print(f"  No data for {year}, skipping")
             continue
         
-        print(f"  {year}년 레코드: {len(year_df):,}개")
+        print(f"  {year} records: {len(year_df):,}")
         
-        # 연도별 이미지 생성
+        # Generate images for current year
         year_images = []
         year_labels = []
         
-        # 병렬 처리로 속도 향상
+        # Parallel processing for speed improvement
         symbol_groups = list(year_df.groupby('code'))
-        print(f"  병렬 처리 중 ({len(symbol_groups)} 종목)...")
+        print(f"  Parallel processing ({len(symbol_groups)} symbols)...")
         
-        # 최적화된 함수 사용 (5-10배 빠름)
+        # Use image generation function
         symbol_results = Parallel(n_jobs=4)(
-            delayed(_DO.single_symbol_image_optimized)(
+            delayed(_D.single_symbol_image)(
                 group_df, 
                 image_size=dataset.image_size,
                 start_date=year_start,
                 sample_rate=sample_rate,
                 mode=mode
-            ) for code, group_df in tqdm(symbol_groups, desc=f"{year}년 이미지 생성")
+            ) for code, group_df in tqdm(symbol_groups, desc=f"{year} image generation")
         )
         
-        print(f"  라벨 생성 중...")
+        print(f"  Generating labels...")
         for symbol_data in symbol_results:
             for entry in symbol_data:
                 if len(entry) == 11:  # [image, label_5, label_20, label_60, ret5, ret20, ret60, date, code, market_cap, ewma_vol]
                     year_images.append(entry[0].astype(np.uint8))
                     
-                    # 실제 데이터로 라벨 생성 (검색 없이 바로 사용)
-                    entry_date = entry[7]      # 날짜
-                    entry_code = entry[8]      # 종목코드
-                    market_cap = entry[9]      # 시가총액
+                    # Generate labels with actual data (direct use without search)
+                    entry_date = entry[7]      # Date
+                    entry_code = entry[8]      # Symbol code
+                    market_cap = entry[9]      # Market cap
                     ewma_vol = entry[10]       # EWMA volatility
                     
                     year_labels.append({
-                        'Date': pd.to_datetime(str(entry_date), format='%Y%m%d'),  # 실제 날짜
-                        'StockID': str(entry_code),  # 실제 종목코드 (PERMNO)
-                        'MarketCap': market_cap / 1000,  # 천달러 단위로 변환
-                        'Ret_5d': entry[4],   # actual_ret5 (소수점 형태)
+                        'Date': pd.to_datetime(str(entry_date), format='%Y%m%d'),  # Actual date
+                        'StockID': str(entry_code),  # Actual symbol code (PERMNO)
+                        'MarketCap': market_cap / 1000,  # Convert to thousands of dollars
+                        'Ret_5d': entry[4],   # actual_ret5 (decimal format)
                         'Ret_20d': entry[5],  # actual_ret20
                         'Ret_60d': entry[6],  # actual_ret60
-                        'Ret_month': entry[5],  # 월간 수익률로 20일 사용
-                        'EWMA_vol': ewma_vol  # 실제 EWMA volatility
+                        'Ret_month': entry[5],  # Use 20-day for monthly returns
+                        'EWMA_vol': ewma_vol  # Actual EWMA volatility
                     })
         
         if len(year_images) == 0:
-            print(f"  {year}년 생성된 이미지 없음")
+            print(f"  No images generated for {year}")
             continue
         
-        print(f"  생성된 이미지: {len(year_images):,}개")
+        print(f"  Generated images: {len(year_images):,}")
         
-        # 1. 이미지를 .dat 파일로 저장 (binary format)
+        # 1. Save images as .dat file (binary format)
         images_filename = f"{filename_prefix}_{year}_images.dat"
         images_path = os.path.join(output_dir, images_filename)
         
-        print(f"  이미지 저장 중: {images_filename}")
+        print(f"  Saving images: {images_filename}")
         images_array = np.array(year_images, dtype=np.uint8)
         
-        # Binary로 저장 (원본과 동일)
+        # Save as binary (same as original)
         with open(images_path, 'wb') as f:
             f.write(images_array.tobytes())
         
-        # 2. 라벨을 .feather 파일로 저장
+        # 2. Save labels as .feather file
         labels_filename = f"{filename_prefix}_{year}_labels_w_delay.feather"
         labels_path = os.path.join(output_dir, labels_filename)
         
-        print(f"  라벨 저장 중: {labels_filename}")
+        print(f"  Saving labels: {labels_filename}")
         labels_df = pd.DataFrame(year_labels)
         
-        # 원본과 동일한 데이터 타입 설정
+        # Set data types same as original
         labels_df['Date'] = pd.to_datetime(labels_df['Date'])
         labels_df['StockID'] = labels_df['StockID'].astype(str)
         labels_df['MarketCap'] = labels_df['MarketCap'].astype(np.float32)
@@ -164,20 +163,20 @@ def create_original_format_images(win_size, mode, sample_rate=1.0):
         labels_df['Ret_month'] = labels_df['Ret_month'].astype(np.float64)
         labels_df['EWMA_vol'] = labels_df['EWMA_vol'].astype(np.float64)
         
-        # Feather 형식으로 저장
+        # Save in Feather format
         feather.write_feather(labels_df, labels_path)
         
-        # 파일 크기 확인
+        # Check file sizes
         img_size_mb = os.path.getsize(images_path) / (1024*1024)
         label_size_mb = os.path.getsize(labels_path) / (1024*1024)
-        print(f"  파일 크기: 이미지 {img_size_mb:.1f}MB, 라벨 {label_size_mb:.1f}MB")
+        print(f"  File sizes: images {img_size_mb:.1f}MB, labels {label_size_mb:.1f}MB")
         
-        # 메모리 정리
+        # Memory cleanup
         del year_images, year_labels, images_array, labels_df
         import gc
         gc.collect()
     
-    # 3. label_columns.txt 생성 (원본과 동일)
+    # 3. Generate label_columns.txt (same as original)
     label_columns_path = os.path.join("img_data_reconstructed", "label_columns.txt")
     with open(label_columns_path, 'w') as f:
         f.write("'Date': The last day of the {}-day rolling window for the chart.\n".format(win_size))
@@ -187,18 +186,18 @@ def create_original_format_images(win_size, mode, sample_rate=1.0):
         f.write("'Ret_month': Holding period return for the next month, from the current monthend to the next monthend.\n")
         f.write("'EWMA_vol': Exponentially weighted volatility (square of daily returns) with alpha as 0.05. One day delay is included.\n")
     
-    print(f"\n✅ 원본 형식 이미지 생성 완료!")
-    print(f"  저장 경로: {output_dir}")
-    print(f"  메타데이터: img_data_reconstructed/label_columns.txt")
+    print(f"\nOriginal format image generation completed!")
+    print(f"  Save path: {output_dir}")
+    print(f"  Metadata: img_data_reconstructed/label_columns.txt")
 
 
 def verify_original_format(output_dir, year=1993):
     """
-    생성된 데이터가 원본과 동일한 형식인지 검증
+    Verify that generated data has same format as original
     """
-    print(f"\n🔍 원본 형식 검증 중...")
+    print(f"\nVerifying original format...")
     
-    # 파일 존재 확인
+    # Check file existence
     images_file = f"20d_month_has_vb_[20]_ma_{year}_images.dat"
     labels_file = f"20d_month_has_vb_[20]_ma_{year}_labels_w_delay.feather"
     
@@ -206,85 +205,85 @@ def verify_original_format(output_dir, year=1993):
     labels_path = os.path.join(output_dir, labels_file)
     
     if not os.path.exists(images_path):
-        print(f"❌ 이미지 파일 없음: {images_path}")
+        print(f"Image file missing: {images_path}")
         return False
     
     if not os.path.exists(labels_path):
-        print(f"❌ 라벨 파일 없음: {labels_path}")
+        print(f"Label file missing: {labels_path}")
         return False
     
-    # 이미지 파일 검증
+    # Verify image file
     try:
         images = np.fromfile(images_path, dtype=np.uint8)
         num_images = len(images) // (64 * 60)
         images = images.reshape(num_images, 64, 60)
-        print(f"✅ 이미지 파일: {num_images:,}개 이미지 ({images.shape})")
-        print(f"   픽셀 값 범위: {images.min()} ~ {images.max()}")
-        print(f"   Binary 검증: {set(np.unique(images)) <= {0, 255}}")
+        print(f"Image file: {num_images:,} images ({images.shape})")
+        print(f"   Pixel value range: {images.min()} ~ {images.max()}")
+        print(f"   Binary verification: {set(np.unique(images)) <= {0, 255}}")
     except Exception as e:
-        print(f"❌ 이미지 파일 읽기 실패: {e}")
+        print(f"Failed to read image file: {e}")
         return False
     
-    # 라벨 파일 검증
+    # Verify label file
     try:
         labels = feather.read_feather(labels_path)
-        print(f"✅ 라벨 파일: {len(labels):,}개 레코드")
-        print(f"   컬럼: {labels.columns.tolist()}")
-        print(f"   데이터 타입: {labels.dtypes.to_dict()}")
+        print(f"Label file: {len(labels):,} records")
+        print(f"   Columns: {labels.columns.tolist()}")
+        print(f"   Data types: {labels.dtypes.to_dict()}")
         
-        # 원본과 컬럼 비교
+        # Compare columns with original
         expected_cols = ['Date', 'StockID', 'MarketCap', 'Ret_5d', 'Ret_20d', 'Ret_60d', 'Ret_month', 'EWMA_vol']
         missing_cols = set(expected_cols) - set(labels.columns)
         if missing_cols:
-            print(f"❌ 누락된 컬럼: {missing_cols}")
+            print(f"Missing columns: {missing_cols}")
             return False
         else:
-            print(f"✅ 모든 필수 컬럼 존재")
+            print(f"All required columns exist")
         
     except Exception as e:
-        print(f"❌ 라벨 파일 읽기 실패: {e}")
+        print(f"Failed to read label file: {e}")
         return False
     
-    print(f"✅ 원본 형식 검증 완료!")
+    print(f"Original format verification completed!")
     return True
 
 
 def main():
-    parser = argparse.ArgumentParser(description='논문 저자 원본 형식으로 이미지 생성')
+    parser = argparse.ArgumentParser(description='Generate images in original paper format')
     parser.add_argument('--image_days', type=int, required=True,
                        choices=[5, 20, 60],
-                       help='이미지 윈도우 크기 (일)')
+                       help='Image window size (days)')
     parser.add_argument('--mode', type=str, required=True,
                        choices=['train', 'test'],
-                       help='데이터셋 모드')
+                       help='Dataset mode')
     parser.add_argument('--sample_rate', type=float, default=1.0,
-                       help='데이터 샘플링 비율 (default: 1.0)')
+                       help='Data sampling rate (default: 1.0)')
     parser.add_argument('--verify', action='store_true',
-                       help='생성 후 검증 수행')
+                       help='Perform verification after generation')
     
     args = parser.parse_args()
     
-    # 시작 시간 측정
+    # Measure start time
     import time
     start_time = time.time()
     
-    # 원본 형식 이미지 생성
+    # Generate original format images
     create_original_format_images(
         win_size=args.image_days,
         mode=args.mode,
         sample_rate=args.sample_rate
     )
     
-    # 검증 수행
+    # Perform verification
     if args.verify:
-        if args.image_days == 20:  # 20일만 검증 구현
+        if args.image_days == 20:  # Only 20-day verification implemented
             dir_name = "monthly_20d"
             output_dir = f"img_data_reconstructed/{dir_name}"
             verify_original_format(output_dir)
     
-    # 완료 시간
+    # Completion time
     total_time = time.time() - start_time
-    print(f"\n⏱️  총 소요 시간: {total_time:.1f}초 ({total_time/60:.1f}분)")
+    print(f"\nTotal time: {total_time:.1f} seconds ({total_time/60:.1f} minutes)")
 
 
 if __name__ == '__main__':
