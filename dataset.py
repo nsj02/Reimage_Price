@@ -288,7 +288,7 @@ class ImageDataSet():
                 
                 print(f"LABEL: {self.label}")
                 print(f"  Down(0): {num0:,} ({100*num0/total:.1f}%), Up(1): {num1:,} ({100*num1/total:.1f}%)")
-        print(f"  Total images: {total:,}")
+                print(f"  Total images: {total:,}")
             
             return image_set
         else:

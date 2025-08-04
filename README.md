@@ -9,8 +9,8 @@ For Google Colab environment:
 ```bash
 # 1. Upload project to Google Drive
 # 2. Run notebooks in order:
-#    - 1_image_generation.ipynb (생성 완료)
-#    - 2_model_training.ipynb (학습 & 평가)
+#    - 1_image_generation.ipynb (Image generation)
+#    - 2_model_training.ipynb (Model training & evaluation)
 ```
 
 ### 1. Data Preparation
@@ -29,40 +29,28 @@ python datageneration.py --image_days 60 --mode test
 Train models (single or ensemble):
 ```bash
 # Single model training
+python train.py --model CNN5d --image_days 5 --pred_days 5 --use_original_format
 python train.py --model CNN20d --image_days 20 --pred_days 20 --use_original_format
+python train.py --model CNN60d --image_days 60 --pred_days 60 --use_original_format
 
 # Ensemble training (paper method: 5 independent runs)
+python train.py --model CNN5d --image_days 5 --pred_days 5 --ensemble --ensemble_runs 5 --use_original_format
 python train.py --model CNN20d --image_days 20 --pred_days 20 --ensemble --ensemble_runs 5 --use_original_format
+python train.py --model CNN60d --image_days 60 --pred_days 60 --ensemble --ensemble_runs 5 --use_original_format
+```
+
 ### 3. Model Evaluation
 Evaluate with decile portfolio backtesting:
 ```bash
 # Single model evaluation  
+python test.py --model CNN5d --image_days 5 --pred_days 5 --use_original_format
 python test.py --model CNN20d --image_days 20 --pred_days 20 --use_original_format
+python test.py --model CNN60d --image_days 60 --pred_days 60 --use_original_format
 
 # Ensemble evaluation
+python test.py --model CNN5d --image_days 5 --pred_days 5 --ensemble --use_original_format
 python test.py --model CNN20d --image_days 20 --pred_days 20 --ensemble --use_original_format
-
-# 20-day models  
-python main.py --model CNN20d --image_days 20 --pred_days 20
-
-# 60-day models
-python main.py --model CNN60d --image_days 60 --pred_days 60
-```
-
-### 3. Model Evaluation
-```bash
-# Test trained models
-python test.py --model CNN5d --image_days 5 --pred_days 5
-python test.py --model CNN20d --image_days 20 --pred_days 20
-python test.py --model CNN60d --image_days 60 --pred_days 60
-```
-
-### 4. Generate Predictions
-```bash
-# Generate prediction factors for backtesting
-python inference.py --model CNN5d --image_days 5 --pred_days 5
-python inference.py --model CNN20d --image_days 20 --pred_days 20
-python inference.py --model CNN60d --image_days 60 --pred_days 60
+python test.py --model CNN60d --image_days 60 --pred_days 60 --ensemble --use_original_format
 ```
 
 ## 📊 Core Methodology
@@ -114,13 +102,17 @@ ReImaging_Price_Trends/
 │   ├── data_1993_2000_train_val.parquet  # Training data
 │   ├── data_2001_2019_test.parquet       # Test data
 │   └── datageneration.ipynb              # WRDS data generation
-├── main.py                                # Training script
-├── train.py                               # Training pipeline
-├── test.py                                # Model evaluation  
-├── inference.py                           # Prediction generation
-├── dataset.py                             # Image conversion core
+├── ipynb/                                 # Jupyter notebooks
+│   ├── 1_image_generation.ipynb          # Image generation
+│   ├── 2_model_training.ipynb            # Model training & evaluation
+│   └── data_analysis.ipynb               # Data analysis
+├── img_data_reconstructed/                # Generated images (.dat + .feather)
+├── datageneration.py                      # Image generation script  
+├── train.py                               # Model training script
+├── test.py                                # Model evaluation script  
+├── dataset.py                             # Image conversion & data loading
 ├── model.py                               # CNN architectures
-└── utils.py                               # Utilities
+└── utils.py                               # Utility functions
 ```
 
 ## 🎯 Expected Results
