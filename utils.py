@@ -4,7 +4,6 @@ utils.py - Utility functions
 Common utility functions used throughout the project:
 1. timer: Function execution time measurement decorator
 2. display_image: Candlestick chart image visualization function  
-3. Dict2ObjParser: Class to convert YAML configurations to objects
 """
 from __init__ import *
 
@@ -59,85 +58,4 @@ def display_image(entry):
     plt.title(f'ret5: {entry[1]}\nret20: {entry[2]}')  # Display label information as title
     
 
-class Dict2ObjParser():
-    """
-    Class to convert dictionaries (or YAML) to objects
-    
-    When reading YAML configuration files, they become nested dictionaries.
-    This class converts them to objects accessible with dot notation.
-    
-    Before: setting['TRAIN']['BATCH_SIZE']  (dictionary access)
-    After: setting.TRAIN.BATCH_SIZE         (object attribute access)
-    
-    Usage example:
-        with open('config.yml', 'r') as f:
-            config_dict = yaml.safe_load(f)
-        
-        parser = Dict2ObjParser(config_dict)
-        setting = parser.parse()
-        
-        print(setting.TRAIN.BATCH_SIZE)  # 64
-        print(setting.MODEL)             # 'CNN5d'
-    """
-    
-    def __init__(self, nested_dict):
-        """
-        Initialization function
-        
-        Args:
-            nested_dict (dict): Nested dictionary to convert
-        """
-        self.nested_dict = nested_dict
-
-    def parse(self):
-        """
-        Main function to convert dictionary to object
-        
-        Returns:
-            namedtuple: Object accessible with dot notation
-        
-        Raises:
-            TypeError: When input is not a dictionary
-        """
-        nested_dict = self.nested_dict
-        if (obj_type := type(nested_dict)) is not dict:
-            raise TypeError(f"Expected 'dict' but found '{obj_type}'")
-        return self._transform_to_named_tuples("root", nested_dict)
-
-    def _transform_to_named_tuples(self, tuple_name, possibly_nested_obj):
-        """
-        Internal function to recursively convert dictionaries to namedtuples
-        
-        How it works:
-        1. Dictionary → convert to namedtuple (keys become attribute names)
-        2. List → recursively convert each element
-        3. Basic types (strings, numbers, etc.) → return as is
-        
-        Args:
-            tuple_name (str): Name of namedtuple to create
-            possibly_nested_obj: Object to convert (dictionary, list, basic type)
-            
-        Returns:
-            Converted object (namedtuple, list, or basic type)
-        """
-        if type(possibly_nested_obj) is dict:
-            # Dictionary case: convert to namedtuple
-            named_tuple_def = namedtuple(tuple_name, possibly_nested_obj.keys())
-            transformed_value = named_tuple_def(
-                *[
-                    self._transform_to_named_tuples(key, value)  # Recursively convert each value
-                    for key, value in possibly_nested_obj.items()
-                ]
-            )
-        elif type(possibly_nested_obj) is list:
-            # List case: recursively convert each element
-            transformed_value = [
-                self._transform_to_named_tuples(f"{tuple_name}_{i}", possibly_nested_obj[i])
-                for i in range(len(possibly_nested_obj))
-            ]
-        else:
-            # Basic type case: return as is
-            transformed_value = possibly_nested_obj
-
-        return transformed_value
 
