@@ -277,7 +277,7 @@ def calculate_decile_performance(df, pred_days):
             continue
             
         # Classify into deciles by up probability
-        day_data = day_data.sort_values('up_prob', ascending=False)
+        day_data = day_data.sort_values('up_prob', ascending=True)
         n_stocks = len(day_data)
         decile_size = n_stocks // 10
         
@@ -303,18 +303,18 @@ def calculate_decile_performance(df, pred_days):
             # Save portfolio weights (equal weight)
             for _, stock in decile_stocks.iterrows():
                 weight = 1.0 / len(decile_stocks)
-                if decile == 1:  # Long (high up probability)
+                if decile == 10:  # Long (high up probability)
                     current_weights[stock['stock_id']] = weight
-                elif decile == 10:  # Short (low up probability)
+                elif decile == 1:  # Short (low up probability)
                     current_weights[stock['stock_id']] = -weight
                 else:
                     current_weights[stock['stock_id']] = 0
         
-        # Long-Short returns (Decile 1 Long + Decile 10 Short)
-        long_return = decile_returns[0]     # Decile 1 Long position (high up probability)
-        short_actual_return = decile_returns[9]  # Decile 10 actual return (low up probability)
-        short_return = -short_actual_return      # Short position return (negative)
-        ls_return = long_return + short_return   # Long + Short
+        # Long-Short returns (Decile 10 Long - Decile 1 Short)
+        long_return = decile_returns[9]     # Decile 10 Long position (high up probability)  
+        short_actual_return = decile_returns[0]  # Decile 1 actual return (low up probability)
+        short_return = short_actual_return       # Short position return (we'll subtract this)
+        ls_return = long_return - short_return   # Long - Short
         
         daily_returns.append({
             'date': date,
@@ -376,10 +376,10 @@ def calculate_decile_performance(df, pred_days):
         'ls_sharpe_ratio': sharpe_ratio,
         'ls_annual_return': annual_return,
         'ls_annual_vol': annual_vol,
-        'long_annual_return': decile_stats[0]['annual_return'],   # Decile 1 = Long
-        'long_sharpe_ratio': decile_stats[0]['sharpe_ratio'],
-        'short_annual_return': decile_stats[9]['annual_return'], # Decile 10 = Short  
-        'short_sharpe_ratio': decile_stats[9]['sharpe_ratio'],
+        'long_annual_return': decile_stats[9]['annual_return'],   # Decile 10 = Long (high prob)
+        'long_sharpe_ratio': decile_stats[9]['sharpe_ratio'],
+        'short_annual_return': decile_stats[0]['annual_return'], # Decile 1 = Short (low prob)  
+        'short_sharpe_ratio': decile_stats[0]['sharpe_ratio'],
         'monthly_turnover': turnover,
         'total_periods': len(returns_df),
         'decile_performance': decile_stats

@@ -65,6 +65,7 @@ data/*.parquet
 images/
 img_data/
 img_data_reconstructed/
+img_data_reconstructed_filled/
 *.dat
 *.feather
 
